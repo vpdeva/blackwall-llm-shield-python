@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blackwall-llm-shield-python"
+version = "0.1.0"
+description = "Open-source Python enterprise LLM protection toolkit for Python services"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [
+  { name = "Vish", email = "hello@vish.au" }
+]
+keywords = ["llm", "security", "prompt-injection", "pii", "enterprise"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent"
+]
+
+[project.urls]
+Homepage = "https://github.com/vishnud23/blackwall-llm-shield"
+Repository = "https://github.com/vishnud23/blackwall-llm-shield"
+Issues = "https://github.com/vishnud23/blackwall-llm-shield/issues"
+Documentation = "https://vish.au"
+Funding = "https://vish.au"
+
+[tool.unittest]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

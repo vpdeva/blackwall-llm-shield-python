@@ -6,10 +6,14 @@ from .core import (
     ToolPermissionFirewall,
     POLICY_PACKS,
     build_admin_dashboard_model,
+    create_fastapi_guard,
+    create_langchain_callbacks,
     create_canary_token,
+    deobfuscate_text,
     detect_canary_leakage,
     detect_prompt_injection,
     inject_canary_tokens,
+    inspect_tone,
     mask_messages,
     mask_text,
     mask_value,
@@ -17,6 +21,7 @@ from .core import (
     run_red_team_suite,
     sanitize_text,
     summarize_security_events,
+    validate_grounding,
 )
 
 __all__ = [
@@ -27,10 +32,14 @@ __all__ = [
     "ToolPermissionFirewall",
     "POLICY_PACKS",
     "build_admin_dashboard_model",
+    "create_fastapi_guard",
+    "create_langchain_callbacks",
     "create_canary_token",
+    "deobfuscate_text",
     "detect_canary_leakage",
     "detect_prompt_injection",
     "inject_canary_tokens",
+    "inspect_tone",
     "mask_messages",
     "mask_text",
     "mask_value",
@@ -38,4 +47,5 @@ __all__ = [
     "run_red_team_suite",
     "sanitize_text",
     "summarize_security_events",
+    "validate_grounding",
 ]

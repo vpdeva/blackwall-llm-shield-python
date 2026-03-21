@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import base64
+import hmac
 import hashlib
 from importlib import resources
 import json
@@ -672,6 +673,7 @@ class CoTScanner:
 class AgentIdentityRegistry:
     def __init__(self):
         self.identities: Dict[str, Dict[str, Any]] = {}
+        self.ephemeral_tokens: Dict[str, Dict[str, Any]] = {}
 
     def register(self, agent_id: str, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         identity = {
@@ -685,6 +687,21 @@ class AgentIdentityRegistry:
 
     def get(self, agent_id: str) -> Optional[Dict[str, Any]]:
         return self.identities.get(agent_id)
+
+    def issue_ephemeral_token(self, agent_id: str, ttl_seconds: int = 300) -> Dict[str, Any]:
+        token = f"nhi_{secrets.token_hex(12)}"
+        expires_at = datetime.now(timezone.utc).timestamp() + ttl_seconds
+        self.ephemeral_tokens[token] = {"agent_id": agent_id, "expires_at": expires_at}
+        return {"token": token, "agent_id": agent_id, "expires_at": datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()}
+
+    def verify_ephemeral_token(self, token: str) -> Dict[str, Any]:
+        record = self.ephemeral_tokens.get(token)
+        if not record:
+            return {"valid": False, "agent_id": None}
+        if record["expires_at"] < datetime.now(timezone.utc).timestamp():
+            self.ephemeral_tokens.pop(token, None)
+            return {"valid": False, "agent_id": record["agent_id"]}
+        return {"valid": True, "agent_id": record["agent_id"]}
 
 
 class AgenticCapabilityGater:
@@ -987,12 +1004,14 @@ class OutputFirewall:
 
 
 class ToolPermissionFirewall:
-    def __init__(self, allowed_tools: Optional[List[str]] = None, blocked_tools: Optional[List[str]] = None, validators: Optional[Dict[str, Any]] = None, require_human_approval_for: Optional[List[str]] = None, capability_gater: Optional[AgenticCapabilityGater] = None):
+    def __init__(self, allowed_tools: Optional[List[str]] = None, blocked_tools: Optional[List[str]] = None, validators: Optional[Dict[str, Any]] = None, require_human_approval_for: Optional[List[str]] = None, capability_gater: Optional[AgenticCapabilityGater] = None, on_approval_request: Optional[Any] = None, approval_webhook_url: Optional[str] = None):
         self.allowed_tools = allowed_tools or []
         self.blocked_tools = blocked_tools or []
         self.validators = validators or {}
         self.require_human_approval_for = require_human_approval_for or []
         self.capability_gater = capability_gater
+        self.on_approval_request = on_approval_request
+        self.approval_webhook_url = approval_webhook_url
 
     def inspect_call(self, tool: str, args: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not tool:
@@ -1011,7 +1030,18 @@ class ToolPermissionFirewall:
             if not gate["allowed"]:
                 return {"allowed": False, "reason": gate["reason"], "requires_approval": False, "agent_gate": gate}
         requires_approval = tool in self.require_human_approval_for
-        return {"allowed": not requires_approval, "reason": f"Tool {tool} requires human approval" if requires_approval else None, "requires_approval": requires_approval}
+        result = {"allowed": not requires_approval, "reason": f"Tool {tool} requires human approval" if requires_approval else None, "requires_approval": requires_approval, "approval_request": {"tool": tool, "args": args or {}, "context": context or {}} if requires_approval else None}
+        if requires_approval:
+            if callable(self.on_approval_request):
+                self.on_approval_request(result["approval_request"])
+            if self.approval_webhook_url:
+                body = json.dumps({"type": "blackwall_jit_approval", **(result["approval_request"] or {})}).encode("utf-8")
+                req = request.Request(self.approval_webhook_url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+                try:
+                    request.urlopen(req, timeout=5)
+                except Exception:
+                    pass
+        return result
 
 
 class RetrievalSanitizer:
@@ -1080,6 +1110,11 @@ class AuditTrail:
             "compliance_map": (event or {}).get("compliance_map") or _map_compliance(
                 [*((event or {}).get("rule_ids") or []), "retrieval_poisoning" if (event or {}).get("type") == "retrieval_poisoning_detected" else ""]
             ),
+            "provenance": (event or {}).get("provenance") or {
+                "agent_id": (event or {}).get("agent_id"),
+                "parent_agent_id": (event or {}).get("parent_agent_id"),
+                "session_id": (event or {}).get("session_id"),
+            },
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         serialized = json.dumps(payload, sort_keys=True).encode("utf-8")
@@ -1113,6 +1148,49 @@ def rehydrate_response(masked_text: Any, vault: Optional[Dict[str, str]] = None)
     for token in sorted((vault or {}).keys(), key=len, reverse=True):
         text = text.replace(token, (vault or {})[token])
     return text
+
+
+def export_local_rehydration_bundle(vault: Optional[Dict[str, str]] = None, secret: Optional[str] = None) -> Dict[str, Any]:
+    payload = base64.b64encode(json.dumps(vault or {}).encode("utf-8")).decode("utf-8")
+    signature = None
+    if secret:
+        signature = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return {"payload": payload, "signature": signature, "signed": bool(secret)}
+
+
+def rehydrate_from_bundle(masked_text: Any, bundle: Optional[Dict[str, Any]] = None, secret: Optional[str] = None) -> str:
+    bundle = bundle or {}
+    payload = bundle.get("payload", "")
+    if bundle.get("signed"):
+        expected = hmac.new((secret or "").encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, str(bundle.get("signature") or "")):
+            raise ValueError("Invalid rehydration bundle signature")
+    vault = json.loads(base64.b64decode(payload.encode("utf-8")).decode("utf-8")) if payload else {}
+    return rehydrate_response(masked_text, vault)
+
+
+class ShadowAIDiscovery:
+    def inspect(self, agents: Any) -> Dict[str, Any]:
+        records = []
+        for index, agent in enumerate(agents or []):
+            exposed = bool((agent or {}).get("external_communication") or (agent or {}).get("network_access"))
+            autonomous = bool((agent or {}).get("autonomous") or (agent or {}).get("agentic"))
+            unprotected = not (agent or {}).get("blackwall_protected") and not (agent or {}).get("guardrails_installed")
+            records.append({
+                "id": (agent or {}).get("id", f"agent_{index + 1}"),
+                "name": (agent or {}).get("name", (agent or {}).get("id", f"agent_{index + 1}")),
+                "protected": not unprotected,
+                "exposed": exposed,
+                "autonomous": autonomous,
+                "risk": "high" if (unprotected and exposed) or (autonomous and unprotected) else "medium" if unprotected else "low",
+            })
+        unprotected = [item for item in records if not item["protected"]]
+        return {
+            "total_agents": len(records),
+            "unprotected_agents": len(unprotected),
+            "records": records,
+            "summary": f"You have {len(unprotected)} unprotected agents running right now." if unprotected else "No unprotected agents detected.",
+        }
 
 
 def summarize_security_events(events: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:

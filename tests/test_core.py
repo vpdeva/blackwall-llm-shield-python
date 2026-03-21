@@ -25,8 +25,11 @@ from blackwall_llm_shield import (
     create_canary_token,
     inject_canary_tokens,
     detect_canary_leakage,
+    export_local_rehydration_bundle,
     rehydrate_response,
+    rehydrate_from_bundle,
     POLICY_PACKS,
+    ShadowAIDiscovery,
     VisualInstructionDetector,
 )
 from blackwall_llm_shield.integrations import BlackwallLangChainCallback
@@ -221,6 +224,45 @@ class ShieldTests(unittest.TestCase):
       )
       self.assertFalse(result["allowed"])
       self.assertIn("Rule of Two", result["reason"])
+
+    def test_tool_firewall_emits_jit_approval_payloads_for_risky_tools(self):
+      approvals = []
+      firewall = ToolPermissionFirewall(
+          allowed_tools=["send_email"],
+          require_human_approval_for=["send_email"],
+          on_approval_request=lambda payload: approvals.append(payload),
+      )
+      result = firewall.inspect_call("send_email", {"to": "a@example.com"}, {"agent_id": "agent-3"})
+      self.assertTrue(result["requires_approval"])
+      self.assertEqual(len(approvals), 1)
+
+    def test_agent_identity_registry_can_issue_and_verify_ephemeral_tokens(self):
+      registry = AgentIdentityRegistry()
+      registry.register("agent-ephemeral")
+      issued = registry.issue_ephemeral_token("agent-ephemeral", ttl_seconds=60)
+      verified = registry.verify_ephemeral_token(issued["token"])
+      self.assertTrue(verified["valid"])
+      self.assertEqual(verified["agent_id"], "agent-ephemeral")
+
+    def test_audit_trail_preserves_provenance_for_cross_agent_traceability(self):
+      event = AuditTrail().record({"type": "tool_call", "agent_id": "agent-a", "parent_agent_id": "agent-root", "session_id": "sess-1"})
+      self.assertEqual(event["provenance"]["agent_id"], "agent-a")
+      self.assertEqual(event["provenance"]["parent_agent_id"], "agent-root")
+
+    def test_shadow_ai_discovery_identifies_unprotected_agents(self):
+      result = ShadowAIDiscovery().inspect([
+          {"id": "a1", "blackwall_protected": False, "external_communication": True},
+          {"id": "a2", "blackwall_protected": True},
+      ])
+      self.assertEqual(result["unprotected_agents"], 1)
+      self.assertIn("unprotected agents", result["summary"])
+
+    def test_local_rehydration_bundle_can_restore_masked_output(self):
+      masked = mask_value("Email Alice Johnson at ceo@example.com", detect_named_entities=True)
+      bundle = export_local_rehydration_bundle(masked["vault"], secret="local-secret")
+      restored = rehydrate_from_bundle(masked["masked"], bundle, secret="local-secret")
+      self.assertIn("Alice Johnson", restored)
+      self.assertIn("ceo@example.com", restored)
 
 
 if __name__ == "__main__":

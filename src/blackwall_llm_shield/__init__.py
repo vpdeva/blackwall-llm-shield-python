@@ -30,11 +30,21 @@ from .core import (
     summarize_security_events,
     validate_grounding,
 )
+from .integrations import (
+    BlackwallLangChainCallback,
+    BlackwallLlamaIndexCallback,
+    BlackwallMiddleware,
+)
+from .semantic import FastTextIntentScorer, load_local_intent_scorer
 
 __all__ = [
     "AuditTrail",
     "BlackwallFastAPIMiddleware",
+    "BlackwallLangChainCallback",
+    "BlackwallLlamaIndexCallback",
+    "BlackwallMiddleware",
     "BlackwallShield",
+    "FastTextIntentScorer",
     "LightweightIntentScorer",
     "OutputFirewall",
     "RetrievalSanitizer",
@@ -54,6 +64,7 @@ __all__ = [
     "get_red_team_prompt_library",
     "inject_canary_tokens",
     "inspect_tone",
+    "load_local_intent_scorer",
     "mask_messages",
     "mask_text",
     "mask_value",

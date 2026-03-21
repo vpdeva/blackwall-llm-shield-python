@@ -22,6 +22,7 @@ Python security toolkit for AI applications and LLM-enabled services. Blackwall 
 
 ```bash
 pip install blackwall-llm-shield-python
+pip install blackwall-llm-shield-python[integrations,semantic]
 ```
 
 ## Fast Start
@@ -68,6 +69,10 @@ Use `shadow_mode` with `shadow_policy_packs` or `compare_policy_packs` to measur
 
 Use `BlackwallFastAPIMiddleware`, `create_flask_middleware()`, `create_langchain_callbacks()`, or `create_llamaindex_callback()` to wire Blackwall into framework or orchestration entry points with less glue code.
 
+### Zero-config UI and sidecar
+
+Run `python -m blackwall_llm_shield.ui` for a local dashboard, or build from [`Dockerfile`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/Dockerfile) to expose Blackwall as a local sidecar proxy for non-Python stacks.
+
 ## Main Primitives
 
 ### `BlackwallShield`
@@ -94,13 +99,14 @@ Produces signed events you can summarize into operations dashboards or audit pip
 
 - [`examples/python-fastapi/main.py`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/examples/python-fastapi/main.py)
 - [`examples/python-fastapi/dashboard_model.py`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/examples/python-fastapi/dashboard_model.py)
+- [`examples/python-fastapi/streamlit_app.py`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/examples/python-fastapi/streamlit_app.py)
 
-## Next Up
+## New Modules
 
-- FastAPI and Django middleware wrappers
-- Structured logging and observability hooks
-- Benchmarks for latency and throughput
-- Expanded adversarial coverage and regression fixtures
+- [`src/blackwall_llm_shield/integrations.py`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/src/blackwall_llm_shield/integrations.py)
+- [`src/blackwall_llm_shield/semantic.py`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/src/blackwall_llm_shield/semantic.py)
+- [`src/blackwall_llm_shield/ui.py`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/src/blackwall_llm_shield/ui.py)
+- [`src/blackwall_llm_shield/sidecar.py`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/src/blackwall_llm_shield/sidecar.py)
 
 ## Support
 

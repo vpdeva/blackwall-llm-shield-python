@@ -27,6 +27,15 @@ Issues = "https://github.com/vishnud23/blackwall-llm-shield/issues"
 Documentation = "https://vish.au"
 Funding = "https://vish.au"
 
+[project.optional-dependencies]
+integrations = ["fastapi>=0.115.0", "flask>=3.0.0", "langchain-core>=0.3.0"]
+semantic = ["fasttext-wheel>=0.9.2"]
+ui = ["streamlit>=1.39.0"]
+
+[project.scripts]
+blackwall-shield-ui = "blackwall_llm_shield.ui:main"
+blackwall-shield-sidecar = "blackwall_llm_shield.sidecar:main"
+
 [tool.unittest]
 
 [tool.setuptools]

@@ -12,10 +12,11 @@ Python security toolkit for AI applications and LLM-enabled services. Blackwall 
 - Supports shadow mode and side-by-side policy-pack evaluation
 - Sends alerts through callbacks or webhooks
 - Inspects outputs for leakage, unsafe code, grounding drift, and tone violations
+- Ships drop-in FastAPI/Flask middleware and LangChain/LlamaIndex callback helpers
 - Enforces tool permissions and approval gates
 - Sanitizes retrieval documents for RAG pipelines
 - Records signed audit events and dashboard models
-- Supports canary tokens, synthetic PII replacement, built-in red-team playbooks, and framework helpers
+- Supports canary tokens, synthetic PII replacement, optional spaCy/Presidio detectors, built-in red-team playbooks, and framework helpers
 
 ## Install
 
@@ -65,7 +66,7 @@ Use `shadow_mode` with `shadow_policy_packs` or `compare_policy_packs` to measur
 
 ### Lightweight integrations
 
-Use `create_fastapi_guard()` or `create_langchain_callbacks()` to wire Blackwall into framework or orchestration entry points with less glue code.
+Use `BlackwallFastAPIMiddleware`, `create_flask_middleware()`, `create_langchain_callbacks()`, or `create_llamaindex_callback()` to wire Blackwall into framework or orchestration entry points with less glue code.
 
 ## Main Primitives
 

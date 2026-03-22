@@ -149,6 +149,41 @@ SHIELD_PRESETS = {
         "shadow_mode": False,
         "policy_pack": "finance",
     },
+    "government_strict": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "medium",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": False,
+        "policy_pack": "government",
+    },
+    "banking_payments": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "medium",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": False,
+        "policy_pack": "finance",
+    },
+    "document_intake": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "high",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": True,
+        "policy_pack": "government",
+    },
+    "citizen_services": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "medium",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": True,
+        "policy_pack": "government",
+    },
+    "internal_ops_agent": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "medium",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": True,
+        "policy_pack": "finance",
+    },
 }
 
 CORE_INTERFACE_VERSION = "1.0"
@@ -449,6 +484,164 @@ class PowerBIExporter:
             except Exception:
                 pass
         return records
+
+
+class DataClassificationGate:
+    def __init__(self, default_level: str = "internal", provider_allow_map: Optional[Dict[str, List[str]]] = None):
+        self.default_level = default_level
+        self.provider_allow_map = provider_allow_map or {}
+
+    def classify(self, metadata: Optional[Dict[str, Any]] = None, findings: Optional[List[Dict[str, Any]]] = None, messages: Any = None) -> str:
+        payload = metadata or {}
+        if payload.get("classification"):
+            return str(payload["classification"])
+        finding_types = [item.get("type") for item in (findings or []) if item.get("type")]
+        if any(item in {"credit_card", "tfn", "passport", "license", "api_key", "jwt", "bearer_token"} for item in finding_types):
+            return "restricted"
+        if finding_types:
+            return "confidential"
+        text = json.dumps(messages or []).lower()
+        if re.search(r"\bconfidential|restricted|secret\b", text):
+            return "confidential"
+        return self.default_level
+
+    def inspect(self, metadata: Optional[Dict[str, Any]] = None, findings: Optional[List[Dict[str, Any]]] = None, messages: Any = None, provider: Optional[str] = None) -> Dict[str, Any]:
+        classification = self.classify(metadata=metadata, findings=findings, messages=messages)
+        allowed_providers = self.provider_allow_map.get(classification)
+        allowed = not provider or not allowed_providers or provider in allowed_providers
+        return {
+            "allowed": allowed,
+            "classification": classification,
+            "provider": provider,
+            "allowed_providers": allowed_providers,
+            "reason": None if allowed else f"Provider {provider} is not allowed for {classification} data",
+        }
+
+
+class ProviderRoutingPolicy:
+    def __init__(self, routes: Optional[Dict[str, Dict[str, str]]] = None, fallback_provider: Optional[str] = None):
+        self.routes = routes or {}
+        self.fallback_provider = fallback_provider
+
+    def choose(self, route: str = "", classification: str = "internal", requested_provider: Optional[str] = None, candidates: Optional[List[str]] = None) -> Dict[str, Any]:
+        route_config = self.routes.get(route) or self.routes.get("default") or {}
+        preferred = route_config.get(classification) or route_config.get("default") or requested_provider or self.fallback_provider or ((candidates or [None])[0])
+        allowed_candidates = candidates or ([preferred] if preferred else [])
+        chosen = preferred if preferred in allowed_candidates else (allowed_candidates[0] if allowed_candidates else None)
+        return {"provider": chosen, "route": route, "classification": classification, "requested_provider": requested_provider, "candidates": allowed_candidates}
+
+
+class ApprovalInboxModel:
+    def __init__(self, required_approvers: int = 1):
+        self.required_approvers = required_approvers
+        self.requests: List[Dict[str, Any]] = []
+
+    def create_request(self, request_payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        payload = request_payload or {}
+        record = {
+            "id": payload.get("id") or f"apr_{secrets.token_hex(6)}",
+            "status": "pending",
+            "required_approvers": payload.get("required_approvers", self.required_approvers),
+            "approvals": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            **payload,
+        }
+        self.requests.append(record)
+        return record
+
+    def approve(self, request_id: str, approver: str) -> Optional[Dict[str, Any]]:
+        request_record = next((item for item in self.requests if item["id"] == request_id), None)
+        if not request_record:
+            return None
+        if approver not in request_record["approvals"]:
+            request_record["approvals"].append(approver)
+        request_record["status"] = "approved" if len(request_record["approvals"]) >= request_record["required_approvers"] else "pending"
+        return request_record
+
+    def summarize(self) -> Dict[str, Any]:
+        return {
+            "total": len(self.requests),
+            "pending": len([item for item in self.requests if item["status"] == "pending"]),
+            "approved": len([item for item in self.requests if item["status"] == "approved"]),
+        }
+
+
+def build_compliance_event_bundle(event: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = json.dumps(event or {}, sort_keys=True)
+    evidence_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return {
+        "schema_version": "1.0",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "evidence_hash": evidence_hash,
+        "event": event or {},
+    }
+
+
+def sanitize_audit_event(event: Optional[Dict[str, Any]] = None, keep_evidence: bool = False) -> Dict[str, Any]:
+    clone = json.loads(json.dumps(event or {}))
+    if not keep_evidence and ((clone.get("report") or {}).get("sensitive_data")):
+        clone["report"]["sensitive_data"]["findings"] = [{"type": item.get("type")} for item in ((clone["report"]["sensitive_data"].get("findings")) or [])]
+    return clone
+
+
+class RetrievalTrustScorer:
+    def score(self, documents: Any) -> List[Dict[str, Any]]:
+        results = []
+        for index, doc in enumerate(documents or []):
+            metadata = (doc or {}).get("metadata") or {}
+            source_trust = 0.4 if metadata.get("approved") else 0.1
+            freshness = 0.3 if metadata.get("fresh") else 0.1
+            origin = 0.3 if metadata.get("origin") == "trusted" else 0.1
+            score = round(min(1.0, source_trust + freshness + origin), 2)
+            results.append({
+                "id": (doc or {}).get("id", f"doc_{index + 1}"),
+                "trust_score": score,
+                "trusted": score >= 0.7,
+                "metadata": metadata,
+            })
+        return results
+
+
+class OutboundCommunicationGuard:
+    def __init__(self, output_firewall: Optional[Any] = None):
+        self.output_firewall = output_firewall or OutputFirewall(risk_threshold="high", enforce_professional_tone=True)
+
+    def inspect(self, message: Any, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        review = self.output_firewall.inspect(message)
+        return {
+            "allowed": review["allowed"],
+            "review": review,
+            "channel": (metadata or {}).get("channel", "outbound"),
+            "recipient": (metadata or {}).get("recipient"),
+        }
+
+
+class UploadQuarantineWorkflow:
+    def __init__(self, shield: Optional[Any] = None, approval_inbox: Optional[ApprovalInboxModel] = None):
+        self.shield = shield or BlackwallShield(preset="document_intake")
+        self.approval_inbox = approval_inbox or ApprovalInboxModel(required_approvers=1)
+
+    def inspect_upload(self, content: Any, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        guarded = self.shield.guard_model_request(
+            [{"role": "user", "content": content}],
+            metadata={**(metadata or {}), "feature": (metadata or {}).get("feature", "upload_intake")},
+        )
+        quarantined = (not guarded["allowed"]) or guarded["report"]["sensitive_data"]["has_sensitive_data"]
+        approval_request = self.approval_inbox.create_request({"route": (metadata or {}).get("route", "/uploads"), "reason": guarded["reason"] or "Upload requires review", "metadata": metadata or {}}) if quarantined else None
+        return {"quarantined": quarantined, "approval_request": approval_request, "guard": guarded}
+
+
+def detect_operational_drift(previous_summary: Optional[Dict[str, Any]] = None, current_summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    previous_blocked = (previous_summary or {}).get("weekly_block_estimate", 0)
+    current_blocked = (current_summary or {}).get("weekly_block_estimate", 0)
+    delta = current_blocked - previous_blocked
+    return {
+        "drift_detected": abs(delta) > 0,
+        "blocked_delta": delta,
+        "previous_blocked": previous_blocked,
+        "current_blocked": current_blocked,
+        "severity": "high" if delta > 10 else "medium" if delta > 0 else "low",
+    }
 
 
 def _resolve_shield_preset(name: Optional[str]) -> Dict[str, Any]:
@@ -1224,6 +1417,26 @@ class AgentIdentityRegistry:
             "blackwall_protected": bool(payload.get("blackwall_protected")),
         }
 
+    def issue_passport_token(self, agent_id: str, **options: Any) -> str:
+        passport = self.issue_signed_passport(agent_id, **options)
+        header = base64.urlsafe_b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode("utf-8")).decode("utf-8").rstrip("=")
+        payload = base64.urlsafe_b64encode(json.dumps(passport).encode("utf-8")).decode("utf-8").rstrip("=")
+        signature = hmac.new(self.secret.encode("utf-8"), f"{header}.{payload}".encode("utf-8"), hashlib.sha256).digest()
+        encoded_sig = base64.urlsafe_b64encode(signature).decode("utf-8").rstrip("=")
+        return f"{header}.{payload}.{encoded_sig}"
+
+    def verify_passport_token(self, token: str) -> Dict[str, Any]:
+        parts = (token or "").split(".")
+        if len(parts) != 3:
+            return {"valid": False, "reason": "Malformed passport token"}
+        header, payload, signature = parts
+        expected = base64.urlsafe_b64encode(hmac.new(self.secret.encode("utf-8"), f"{header}.{payload}".encode("utf-8"), hashlib.sha256).digest()).decode("utf-8").rstrip("=")
+        if not hmac.compare_digest(signature, expected):
+            return {"valid": False, "reason": "Invalid passport token signature"}
+        padded = payload + "=" * (-len(payload) % 4)
+        passport = json.loads(base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8"))
+        return {"valid": True, "passport": passport, **self.verify_signed_passport(passport)}
+
 
 class AgenticCapabilityGater:
     def __init__(self, registry: Optional[AgentIdentityRegistry] = None):
@@ -1267,11 +1480,12 @@ class MCPSecurityProxy:
 
 
 class ValueAtRiskCircuitBreaker:
-    def __init__(self, max_value_per_window: float = 5000, window_seconds: int = 3600, revocation_seconds: int = 1800, value_extractor: Optional[Any] = None):
+    def __init__(self, max_value_per_window: float = 5000, window_seconds: int = 3600, revocation_seconds: int = 1800, value_extractor: Optional[Any] = None, tool_schemas: Optional[List[Dict[str, Any]]] = None):
         self.max_value_per_window = max_value_per_window
         self.window_seconds = window_seconds
         self.revocation_seconds = revocation_seconds
         self.value_extractor = value_extractor or (lambda args, context: context.get("action_value", args.get("amount", 0)))
+        self.tool_schemas = tool_schemas or []
         self.entries: List[Dict[str, Any]] = []
         self.revocations: Dict[str, float] = {}
 
@@ -1298,7 +1512,10 @@ class ValueAtRiskCircuitBreaker:
                 "risk_window_value": None,
             }
         self.entries = [entry for entry in self.entries if (now - entry["at"]) <= self.window_seconds]
-        action_value = max(0.0, float(self.value_extractor(args or {}, payload) or 0))
+        schema = next((item for item in self.tool_schemas if item.get("name") == tool), {})
+        field = schema.get("monetary_value_field") or schema.get("value_field")
+        schema_value = float((args or {}).get(field, 0)) if field else 0.0
+        action_value = max(0.0, float((schema_value or self.value_extractor(args or {}, payload)) or 0))
         key = session_id or payload.get("agent_id") or payload.get("user_id") or "default"
         risk_window_value = sum(entry["value"] for entry in self.entries if entry["key"] == key) + action_value
         triggered = risk_window_value > self.max_value_per_window
@@ -1353,6 +1570,35 @@ class ShadowConsensusAuditor:
         }
 
 
+class CrossModelConsensusWrapper:
+    def __init__(self, primary_adapter: Optional[Any] = None, auditor_adapter: Optional[Any] = None, decision_parser: Optional[Any] = None):
+        self.primary_adapter = primary_adapter
+        self.auditor_adapter = auditor_adapter
+        self.decision_parser = decision_parser or self._default_decision_parser
+
+    def _default_decision_parser(self, output: Any) -> str:
+        text = output if isinstance(output, str) else json.dumps(output or "")
+        return "block" if re.search(r"\b(block|unsafe|deny|disagree)\b", text, re.IGNORECASE) else "allow"
+
+    def evaluate(self, messages: Any, metadata: Optional[Dict[str, Any]] = None, primary_result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if not self.auditor_adapter or not callable(getattr(self.auditor_adapter, "invoke", None)):
+            return {"agreed": True, "disagreement": False, "reason": None, "primary_decision": "allow", "auditor_decision": "allow"}
+        primary_decision = "block" if (primary_result or {}).get("blocked") else "allow"
+        response = self.auditor_adapter.invoke({"messages": messages or [], "metadata": metadata or {}, "primary_result": primary_result or {}})
+        output = self.auditor_adapter.extract_output(response.get("response") if isinstance(response, dict) and "response" in response else response, primary_result or {}) if callable(getattr(self.auditor_adapter, "extract_output", None)) else (response.get("output") if isinstance(response, dict) else response)
+        auditor_decision = self.decision_parser(output)
+        disagreement = auditor_decision != primary_decision
+        return {
+            "agreed": not disagreement,
+            "disagreement": disagreement,
+            "primary_decision": primary_decision,
+            "auditor_decision": auditor_decision,
+            "reason": "Logic Conflict: cross-model auditor disagreed with the primary decision" if disagreement else None,
+            "auditor_response": response,
+            "auditor_output": output,
+        }
+
+
 class DigitalTwinOrchestrator:
     def __init__(self, tool_schemas: Optional[List[Dict[str, Any]]] = None):
         self.tool_schemas = tool_schemas or []
@@ -1377,6 +1623,11 @@ class DigitalTwinOrchestrator:
             return handlers[tool](args or {})
 
         return {"handlers": handlers, "simulate_call": _simulate_call, "invocations": self.invocations}
+
+    @staticmethod
+    def from_tool_permission_firewall(firewall: Any) -> "DigitalTwinOrchestrator":
+        schemas = getattr(firewall, "tool_schemas", None) or []
+        return DigitalTwinOrchestrator(tool_schemas=schemas)
 
 
 def suggest_policy_override(approval: Optional[bool] = None, route: Optional[str] = None, guard_result: Optional[Dict[str, Any]] = None, tool_decision: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
@@ -1403,6 +1654,25 @@ def suggest_policy_override(approval: Optional[bool] = None, route: Optional[str
             "rationale": "Suggested from approved high-impact tool action",
         }
     return None
+
+
+class PolicyLearningLoop:
+    def __init__(self):
+        self.decisions: List[Dict[str, Any]] = []
+
+    def record_decision(self, **input: Any) -> Optional[Dict[str, Any]]:
+        entry = {**input, "recorded_at": datetime.now(timezone.utc).isoformat()}
+        self.decisions.append(entry)
+        return suggest_policy_override(**input)
+
+    def suggest_overrides(self) -> List[Dict[str, Any]]:
+        suggestions = []
+        for entry in self.decisions:
+            payload = {key: value for key, value in entry.items() if key != "recorded_at"}
+            suggestion = suggest_policy_override(**payload)
+            if suggestion:
+                suggestions.append(suggestion)
+        return suggestions
 
 
 class ImageMetadataScanner:
@@ -1869,14 +2139,16 @@ class OutputFirewall:
 
 
 class ToolPermissionFirewall:
-    def __init__(self, allowed_tools: Optional[List[str]] = None, blocked_tools: Optional[List[str]] = None, validators: Optional[Dict[str, Any]] = None, require_human_approval_for: Optional[List[str]] = None, capability_gater: Optional[AgenticCapabilityGater] = None, value_at_risk_circuit_breaker: Optional[ValueAtRiskCircuitBreaker] = None, consensus_auditor: Optional[ShadowConsensusAuditor] = None, consensus_required_for: Optional[List[str]] = None, on_approval_request: Optional[Any] = None, approval_webhook_url: Optional[str] = None):
+    def __init__(self, allowed_tools: Optional[List[str]] = None, blocked_tools: Optional[List[str]] = None, validators: Optional[Dict[str, Any]] = None, tool_schemas: Optional[List[Dict[str, Any]]] = None, require_human_approval_for: Optional[List[str]] = None, capability_gater: Optional[AgenticCapabilityGater] = None, value_at_risk_circuit_breaker: Optional[ValueAtRiskCircuitBreaker] = None, consensus_auditor: Optional[ShadowConsensusAuditor] = None, cross_model_consensus: Optional[CrossModelConsensusWrapper] = None, consensus_required_for: Optional[List[str]] = None, on_approval_request: Optional[Any] = None, approval_webhook_url: Optional[str] = None):
         self.allowed_tools = allowed_tools or []
         self.blocked_tools = blocked_tools or []
         self.validators = validators or {}
+        self.tool_schemas = tool_schemas or []
         self.require_human_approval_for = require_human_approval_for or []
         self.capability_gater = capability_gater
         self.value_at_risk_circuit_breaker = value_at_risk_circuit_breaker
         self.consensus_auditor = consensus_auditor
+        self.cross_model_consensus = cross_model_consensus
         self.consensus_required_for = consensus_required_for or []
         self.on_approval_request = on_approval_request
         self.approval_webhook_url = approval_webhook_url
@@ -1924,6 +2196,14 @@ class ToolPermissionFirewall:
                     "consensus": consensus,
                     "approval_request": {"tool": tool, "args": args or {}, "context": context or {}, "consensus": consensus},
                 }
+        if self.cross_model_consensus and ((context or {}).get("high_impact") or tool in self.consensus_required_for):
+            return {
+                "allowed": False,
+                "reason": "Cross-model consensus requires async inspection",
+                "requires_approval": True,
+                "requires_async_consensus": True,
+                "approval_request": {"tool": tool, "args": args or {}, "context": context or {}},
+            }
         requires_approval = tool in self.require_human_approval_for
         result = {"allowed": not requires_approval, "reason": f"Tool {tool} requires human approval" if requires_approval else None, "requires_approval": requires_approval, "approval_request": {"tool": tool, "args": args or {}, "context": context or {}} if requires_approval else None}
         if requires_approval:
@@ -1936,6 +2216,26 @@ class ToolPermissionFirewall:
                     request.urlopen(req, timeout=5)
                 except Exception:
                     pass
+        return result
+
+    def inspect_call_async(self, tool: str, args: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        result = self.inspect_call(tool, args, context)
+        if result.get("requires_async_consensus") and self.cross_model_consensus:
+            consensus = self.cross_model_consensus.evaluate(
+                messages=(context or {}).get("consensus_messages") or [{"role": "user", "content": json.dumps({"tool": tool, "args": args or {}, "context": context or {}})}],
+                metadata=context or {},
+                primary_result=result,
+            )
+            if consensus["disagreement"]:
+                return {
+                    "allowed": False,
+                    "reason": consensus["reason"],
+                    "requires_approval": True,
+                    "logic_conflict": True,
+                    "consensus": consensus,
+                    "approval_request": {"tool": tool, "args": args or {}, "context": context or {}, "consensus": consensus},
+                }
+            return {"allowed": True, "reason": None, "requires_approval": False, "consensus": consensus}
         return result
 
 

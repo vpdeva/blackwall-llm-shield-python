@@ -29,6 +29,8 @@ pip install vpdeva-blackwall-llm-shield-python
 pip install "vpdeva-blackwall-llm-shield-python[integrations,semantic]"
 ```
 
+The core package is intended to be standalone. Add extras only when you want framework adapters or heavier local semantic tooling.
+
 ## Fast Start
 
 ```python
@@ -117,7 +119,7 @@ Pair it with `protect_model_call()` by passing sanitized documents into `firewal
 
 ### Contract Stability
 
-The 0.1.x line treats `guard_model_request()`, `protect_with_adapter()`, `review_model_response()`, `ToolPermissionFirewall`, and `RetrievalSanitizer` as the long-term integration contracts. The exported `CORE_INTERFACES` map can be logged or asserted by applications that want to pin expected behavior.
+The 0.2.x line treats `guard_model_request()`, `protect_with_adapter()`, `review_model_response()`, `ToolPermissionFirewall`, and `RetrievalSanitizer` as the long-term integration contracts. The exported `CORE_INTERFACES` map can be logged or asserted by applications that want to pin expected behavior.
 
 Recommended presets:
 
@@ -129,6 +131,22 @@ Recommended presets:
 - `document_review` for classification and document-review pipelines
 - `rag_search` for search-heavy retrieval endpoints
 - `tool_calling` for routes that broker external actions
+- `government_strict` for highly regulated public-sector and records-sensitive workflows
+- `banking_payments` for high-value payment and financial action routes
+- `document_intake` for upload-heavy intake and review flows
+- `citizen_services` for identity-aware service delivery workflows
+- `internal_ops_agent` for internal operational assistants with shadow-first defaults
+
+### Global Governance Pack
+
+The 0.2.2 line also adds globally applicable enterprise controls that are useful across regulated industries, not just one country or sector:
+
+- `DataClassificationGate` to classify traffic as `public`, `internal`, `confidential`, or `restricted`
+- `ProviderRoutingPolicy` to keep sensitive classes on approved providers
+- `ApprovalInboxModel` and `UploadQuarantineWorkflow` for quarantine and review-first intake
+- `build_compliance_event_bundle()` and `sanitize_audit_event()` for audit-safe event export
+- `RetrievalTrustScorer` and `OutboundCommunicationGuard` for retrieval trust and outbound checks
+- `detect_operational_drift()` for release-over-release noise monitoring
 
 ## Example Workflow
 
@@ -204,6 +222,20 @@ firewall = ToolPermissionFirewall(
 )
 ```
 
+## Add Automatic Cross-model Consensus
+
+```python
+consensus = CrossModelConsensusWrapper(
+    auditor_adapter=gemini_auditor_adapter,
+)
+
+firewall = ToolPermissionFirewall(
+    allowed_tools=["issue_refund"],
+    cross_model_consensus=consensus,
+    consensus_required_for=["issue_refund"],
+)
+```
+
 ## Generate a Digital Twin for Sandbox Testing
 
 ```python
@@ -215,6 +247,8 @@ twin = DigitalTwinOrchestrator(
 
 twin["simulate_call"]("lookup_order", {"order_id": "ord_1"})
 ```
+
+You can also derive a digital twin from `ToolPermissionFirewall` tool schemas with `DigitalTwinOrchestrator.from_tool_permission_firewall(firewall)`.
 
 ## Strict JSON Workflow Pattern
 
@@ -351,9 +385,10 @@ Produces signed events you can summarize into operations dashboards or audit pip
 
 - `ValueAtRiskCircuitBreaker` for financial or high-value operational actions
 - `ShadowConsensusAuditor` for second-model or secondary-review logic conflict checks
+- `CrossModelConsensusWrapper` for automatic cross-model verification of high-impact actions
 - `DigitalTwinOrchestrator` for mock tool environments and sandbox simulations
-- `suggest_policy_override()` for narrow false-positive tuning suggestions after HITL approvals
-- `AgentIdentityRegistry.issue_signed_passport()` for signed agent identity exchange
+- `PolicyLearningLoop` plus `suggest_policy_override()` for narrow false-positive tuning suggestions after HITL approvals
+- `AgentIdentityRegistry.issue_signed_passport()` and `issue_passport_token()` for signed agent identity exchange
 
 ## Included Examples
 

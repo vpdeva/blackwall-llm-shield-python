@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.1
+
+- Added `CrossModelConsensusWrapper` for out-of-the-box cross-model safety verification
+- Extended VaR breakers with tool-schema monetary value fields
+- Added schema-derived digital twins from `ToolPermissionFirewall`
+- Added `PolicyLearningLoop` for approval-history-based policy suggestions
+- Added JWT-style passport tokens in `AgentIdentityRegistry`
+
+## 0.2.3
+
+- Clarified the standalone install story for Python so the core package remains lightweight while integrations and semantic tooling stay opt-in
+- Aligned package versioning with the JS install-path cleanup release
+
+## 0.2.2
+
+- Added a globally applicable governance pack with data classification gates, provider routing policies, approval inbox models, upload quarantine workflows, retrieval trust scoring, outbound communication guards, compliance event bundles, and operational drift detection
+- Expanded regulated-environment presets for government, banking, document intake, citizen services, and internal operations routes
+- Added regression coverage for the new governance primitives and aligned enterprise rollout docs with the 0.2.x contract line
+
 ## 0.2.0
 
 - Added `ValueAtRiskCircuitBreaker` for high-value tool/action thresholds with session revocation and MFA-style escalation flags

@@ -133,6 +133,12 @@ Produces signed events you can summarize into operations dashboards or audit pip
 - [`examples/python-fastapi/dashboard_model.py`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/examples/python-fastapi/dashboard_model.py)
 - [`examples/python-fastapi/streamlit_app.py`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/examples/python-fastapi/streamlit_app.py)
 
+## Release Commands
+
+- `make test` runs the Python test suite
+- `make build` builds the distribution into `dist/`
+- `make publish` uploads the package to PyPI with `twine`
+
 ## New Modules
 
 - [`src/blackwall_llm_shield/integrations.py`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/src/blackwall_llm_shield/integrations.py)

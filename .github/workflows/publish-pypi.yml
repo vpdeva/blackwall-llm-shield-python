@@ -13,13 +13,10 @@ permissions:
 jobs:
   publish-pypi:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: blackwall-llm-shield-python
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -51,4 +48,4 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_TOKEN }}
-          packages-dir: blackwall-llm-shield-python/dist/
+          packages-dir: dist/

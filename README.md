@@ -69,6 +69,10 @@ Use `shadow_mode` with `shadow_policy_packs` or `compare_policy_packs` to measur
 
 Use `create_openai_adapter()`, `create_anthropic_adapter()`, `create_gemini_adapter()`, or `create_openrouter_adapter()` with `protect_with_adapter()` when you want Blackwall to wrap the provider call end to end.
 
+### Controlled-pilot rollout
+
+The current recommendation for enterprise teams is a controlled pilot first: start in shadow mode, aggregate route-level telemetry, tune suppressions explicitly, then promote the cleanest routes to enforcement.
+
 ### Observability and control-plane support
 
 Use `summarize_operational_telemetry()` with emitted telemetry events when you want route-level, tenant-level, and model-level summaries, blocked-event counts, and rollout visibility for operators.
@@ -153,6 +157,19 @@ print(result["stage"], result["allowed"])
 print(telemetry[-1]["type"])
 ```
 
+## Wrap Blackwall Behind Your Own App Adapter
+
+```python
+def create_model_shield(shield):
+    def run(messages, metadata, call_provider):
+        return shield.protect_model_call(
+            messages,
+            call_provider,
+            metadata=metadata,
+        )
+    return run
+```
+
 ## Strict JSON Workflow Pattern
 
 ```python
@@ -191,6 +208,17 @@ shield = BlackwallShield(
     ],
 )
 ```
+
+## Gemini Adoption Pattern
+
+For Gemini-heavy stacks, the cleanest production shape is:
+
+- apply `preset="shadow_first"` or a route-specific preset like `agent_planner` or `document_review`
+- attach `route`, `feature`, and `tenant_id` metadata
+- wrap the Gemini SDK call with `create_gemini_adapter()` plus `protect_with_adapter()`
+- ship `report["telemetry"]` and `on_telemetry` into a route-level log sink
+
+That keeps request guarding, output review, and operator reporting in one path without scattering policy logic across the application.
 
 ## Route and Domain Examples
 
@@ -247,6 +275,13 @@ shield = BlackwallShield(
 - Full provider wrapper: `protect_with_adapter()`
 - Tool firewall + RAG sanitizer: `ToolPermissionFirewall` + `RetrievalSanitizer`
 
+## False-positive Tuning
+
+- Start with route-level `shadow_mode=True`
+- Add `suppress_prompt_rules` only per route, not globally, so each suppression stays explainable
+- Log `report["prompt_injection"]["matches"]` and `report["telemetry"]["prompt_injection_rule_hits"]` to explain why a request was flagged
+- Review `summary["noisiest_routes"]`, `summary["by_feature"]`, and `summary["weekly_block_estimate"]` before raising enforcement
+
 ## Operational Telemetry Summaries
 
 ```python
@@ -298,6 +333,12 @@ The Python package ships a stable provider-adapter contract for:
 The intended direction is to keep widening support without changing the wrapper contract applications call.
 
 For Gemini-heavy apps, the bundled adapter now preserves system instructions plus mixed text/image/file parts so direct SDK calls need less compatibility glue.
+
+## Enterprise Adoption Notes
+
+- A controlled pilot is a good fit today when you want shadow-mode prompt and output protection without forcing hard blocking on every route immediately.
+- If you prefer not to depend on Blackwall directly everywhere, wrap it behind your own internal model-security abstraction and expose only the contract your app teams need.
+- For broader approval, focus rollout reviews on false-positive rates, noisiest routes, and latency budgets alongside jailbreak coverage.
 
 ## Rollout Notes
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vpdeva-blackwall-llm-shield-python"
-version = "0.1.0"
+version = "0.1.2"
 description = "Open-source Python enterprise LLM protection toolkit for Python services"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -20,9 +20,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/vishnud23/blackwall-llm-shield"
-Repository = "https://github.com/vishnud23/blackwall-llm-shield"
-Issues = "https://github.com/vishnud23/blackwall-llm-shield/issues"
+Homepage = "https://github.com/vpdeva/blackwall-llm-shield-python"
+Repository = "https://github.com/vpdeva/blackwall-llm-shield-python"
+Issues = "https://github.com/vpdeva/blackwall-llm-shield-python/issues"
 Documentation = "https://vish.au"
 Funding = "https://vish.au"
 
@@ -37,6 +37,11 @@ blackwall-shield-sidecar = "blackwall_llm_shield.sidecar:main"
 blackwall-scorecard = "blackwall_llm_shield.scorecard:main"
 
 [tool.unittest]
+
+[tool.release-please]
+
+[tool.release-please.release-type]
+default = "python"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

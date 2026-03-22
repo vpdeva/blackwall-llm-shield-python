@@ -12,6 +12,7 @@ Python security toolkit for AI applications and LLM-enabled services. Blackwall 
 - Supports shadow mode and side-by-side policy-pack evaluation
 - Sends alerts through callbacks or webhooks
 - Emits structured telemetry for prompt risk, masking volume, and output review outcomes
+- Includes first-class provider adapters for OpenAI, Anthropic, Gemini, and OpenRouter
 - Inspects outputs for leakage, unsafe code, grounding drift, and tone violations
 - Ships drop-in FastAPI/Flask middleware and LangChain/LlamaIndex callback helpers
 - Enforces tool permissions and approval gates
@@ -62,6 +63,10 @@ print(guarded["report"])
 
 Use `shadow_mode` with `shadow_policy_packs` or `compare_policy_packs` to measure what would have been blocked without interrupting production traffic.
 
+### Provider adapters and stable wrappers
+
+Use `create_openai_adapter()`, `create_anthropic_adapter()`, `create_gemini_adapter()`, or `create_openrouter_adapter()` with `protect_with_adapter()` when you want Blackwall to wrap the provider call end to end.
+
 ### Output grounding and tone review
 
 `OutputFirewall` can compare a response to retrieval documents and flag unsupported claims or unprofessional tone before the answer leaves your service.
@@ -80,7 +85,7 @@ Run `python -m blackwall_llm_shield.ui` for a local dashboard, or build from [`D
 
 Front door for message normalization, masking, prompt-injection detection, alerting, and policy decisions.
 
-It also exposes `protect_model_call()` and `review_model_response()` so you can enforce request checks before provider calls and inspect outputs before they reach users or agents.
+It also exposes `protect_model_call()`, `protect_with_adapter()`, and `review_model_response()` so you can enforce request checks before provider calls and inspect outputs before they reach users or agents.
 
 ### `OutputFirewall`
 
@@ -99,19 +104,23 @@ Pair it with `protect_model_call()` by passing sanitized documents into `firewal
 ## Example Workflow
 
 ```python
-from blackwall_llm_shield import BlackwallShield
+from blackwall_llm_shield import BlackwallShield, create_openai_adapter
 
 telemetry = []
 shield = BlackwallShield(
-    shadow_mode=True,
+    preset="shadow_first",
     on_telemetry=lambda event: telemetry.append(event),
 )
 
-result = shield.protect_model_call(
-    [{"role": "user", "content": "Summarize this shipment exception."}],
-    lambda payload: {"answer": f"Safe summary for {payload['messages'][0]['content']}"},
+adapter = create_openai_adapter(
+    client=openai,
+    model="gpt-4.1-mini",
+)
+
+result = shield.protect_with_adapter(
+    adapter=adapter,
+    messages=[{"role": "user", "content": "Summarize this shipment exception."}],
     metadata={"route": "/chat", "tenant_id": "au-commerce", "user_id": "ops-7"},
-    map_output=lambda response, _: response["answer"],
     firewall_options={
         "retrieval_documents": [
             {"id": "kb-1", "content": "Shipment exceptions should include the parcel ID, lane, and next action."}
@@ -121,6 +130,30 @@ result = shield.protect_model_call(
 
 print(result["stage"], result["allowed"])
 print(telemetry[-1]["type"])
+```
+
+## Route Policies
+
+```python
+shield = BlackwallShield(
+    preset="shadow_first",
+    route_policies=[
+        {
+            "route": "/api/admin/*",
+            "options": {
+                "preset": "strict",
+                "policy_pack": "finance",
+            },
+        },
+        {
+            "route": "/api/health",
+            "options": {
+                "shadow_mode": True,
+                "suppress_prompt_rules": ["ignore_instructions"],
+            },
+        },
+    ],
+)
 ```
 
 ### `AuditTrail`
@@ -138,6 +171,18 @@ Produces signed events you can summarize into operations dashboards or audit pip
 - `make test` runs the Python test suite
 - `make build` builds the distribution into `dist/`
 - `make publish` uploads the package to PyPI with `twine`
+- `make release-check` runs the pre-release test gate
+- `make release-build` builds the package for release
+- `make release-publish` publishes the built package
+- `make version-packages` explains the automated versioning flow for Python
+- merges to `main` trigger release automation that prepares version/release PRs and publishes to PyPI after merge
+
+## Rollout Notes
+
+- Start with `preset="shadow_first"` or `shadow_mode=True` and inspect `report["telemetry"]` plus `on_telemetry` events before enabling hard blocking.
+- Use `RetrievalSanitizer` and `ToolPermissionFirewall` in front of RAG, search, admin actions, and tool-calling flows.
+- Add regression prompts for instruction overrides, prompt leaks, token leaks, and Australian PII samples so upgrades stay safe.
+- Expect some latency increase from grounding checks, output review, and custom detectors; benchmark with your real prompt and response sizes before enforcing globally.
 
 ## New Modules
 

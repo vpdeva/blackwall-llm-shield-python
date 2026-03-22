@@ -15,7 +15,10 @@ from .core import (
     TokenBudgetFirewall,
     ToolPermissionFirewall,
     VisualInstructionDetector,
+    SHIELD_PRESETS,
+    CORE_INTERFACES,
     POLICY_PACKS,
+    build_shield_options,
     build_admin_dashboard_model,
     create_fastapi_guard,
     create_langchain_callbacks,
@@ -42,6 +45,13 @@ from .core import (
     summarize_security_events,
     validate_grounding,
 )
+from .providers import (
+    ProviderAdapter,
+    create_anthropic_adapter,
+    create_gemini_adapter,
+    create_openai_adapter,
+    create_openrouter_adapter,
+)
 from .integrations import (
     BlackwallLangChainCallback,
     BlackwallLlamaIndexCallback,
@@ -59,6 +69,7 @@ __all__ = [
     "BlackwallMiddleware",
     "BlackwallShield",
     "CoTScanner",
+    "CORE_INTERFACES",
     "FastTextIntentScorer",
     "ImageMetadataScanner",
     "LightweightIntentScorer",
@@ -71,6 +82,9 @@ __all__ = [
     "ToolPermissionFirewall",
     "VisualInstructionDetector",
     "POLICY_PACKS",
+    "ProviderAdapter",
+    "SHIELD_PRESETS",
+    "build_shield_options",
     "build_admin_dashboard_model",
     "create_fastapi_guard",
     "create_langchain_callbacks",
@@ -97,4 +111,8 @@ __all__ = [
     "sanitize_text",
     "summarize_security_events",
     "validate_grounding",
+    "create_openai_adapter",
+    "create_anthropic_adapter",
+    "create_gemini_adapter",
+    "create_openrouter_adapter",
 ]

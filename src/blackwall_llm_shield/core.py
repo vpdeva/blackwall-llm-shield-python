@@ -82,6 +82,45 @@ POLICY_PACKS = {
     "creative_writing": {"blocked_tools": ["full_book_export"], "output_risk_threshold": "high", "prompt_injection_threshold": "high", "blocked_topics": ["copyrighted_style_replication", "verbatim_lyrics"]},
 }
 
+SHIELD_PRESETS = {
+    "balanced": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "high",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": False,
+    },
+    "shadow_first": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "medium",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": True,
+    },
+    "strict": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "medium",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": False,
+        "allow_system_messages": False,
+    },
+    "developer_friendly": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "high",
+        "notify_on_risk_level": "high",
+        "shadow_mode": True,
+        "allow_system_messages": True,
+    },
+}
+
+CORE_INTERFACE_VERSION = "1.0"
+CORE_INTERFACES = {
+    "guard_model_request": CORE_INTERFACE_VERSION,
+    "review_model_response": CORE_INTERFACE_VERSION,
+    "protect_model_call": CORE_INTERFACE_VERSION,
+    "protect_with_adapter": CORE_INTERFACE_VERSION,
+    "tool_permission_firewall": CORE_INTERFACE_VERSION,
+    "retrieval_sanitizer": CORE_INTERFACE_VERSION,
+}
+
 LEETSPEAK_MAP = str.maketrans({
     "0": "o",
     "1": "i",
@@ -211,6 +250,148 @@ def _create_telemetry_event(event_type: str, payload: Optional[Dict[str, Any]] =
         "type": event_type,
         "created_at": datetime.now(timezone.utc).isoformat(),
         **(payload or {}),
+    }
+
+
+def _resolve_shield_preset(name: Optional[str]) -> Dict[str, Any]:
+    if not name:
+        return {}
+    return dict(SHIELD_PRESETS.get(name, {}))
+
+
+def _dedupe_list(values: Optional[List[Any]]) -> List[Any]:
+    result: List[Any] = []
+    for value in values or []:
+        if value and value not in result:
+            result.append(value)
+    return result
+
+
+def _route_pattern_matches(pattern: Any, route: str = "", metadata: Optional[Dict[str, Any]] = None) -> bool:
+    if not pattern:
+        return False
+    if callable(pattern):
+        return bool(pattern(route, metadata or {}))
+    if isinstance(pattern, re.Pattern):
+        return bool(pattern.search(route))
+    if isinstance(pattern, str):
+        if pattern == route:
+            return True
+        if "*" in pattern:
+            regex = "^" + ".*".join(re.escape(part) for part in pattern.split("*")) + "$"
+            return bool(re.match(regex, route))
+    return False
+
+
+def _resolve_route_policy(route_policies: Optional[List[Dict[str, Any]]], metadata: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    payload = metadata or {}
+    route = str(payload.get("route") or payload.get("path") or "")
+    matched = [entry for entry in (route_policies or []) if _route_pattern_matches((entry or {}).get("route"), route, payload)]
+    if not matched:
+        return None
+    merged: Dict[str, Any] = {}
+    for entry in matched:
+        options = dict((entry or {}).get("options") or {})
+        merged = {
+            **merged,
+            **options,
+            "shadow_policy_packs": _dedupe_list((merged.get("shadow_policy_packs") or []) + (options.get("shadow_policy_packs") or [])),
+            "entity_detectors": (merged.get("entity_detectors") or []) + (options.get("entity_detectors") or []),
+            "custom_prompt_detectors": (merged.get("custom_prompt_detectors") or []) + (options.get("custom_prompt_detectors") or []),
+            "suppress_prompt_rules": _dedupe_list((merged.get("suppress_prompt_rules") or []) + (options.get("suppress_prompt_rules") or [])),
+        }
+    return merged
+
+
+def _apply_prompt_rule_suppressions(injection: Dict[str, Any], suppressed_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    suppression_set = set(_dedupe_list(suppressed_ids))
+    if not suppression_set:
+        return injection
+    matches = [item for item in injection.get("matches", []) if item.get("id") not in suppression_set]
+    score = min(sum(int(item.get("score", 0)) for item in matches), 100)
+    return {
+        **injection,
+        "matches": matches,
+        "score": score,
+        "level": _risk_level(score),
+        "blocked_by_default": score >= 45,
+    }
+
+
+def _apply_custom_prompt_detectors(injection: Dict[str, Any], text: str, options: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    detectors = options.get("custom_prompt_detectors") or []
+    if not detectors:
+        return injection
+    matches = list(injection.get("matches", []))
+    seen = {item.get("id") for item in matches}
+    score = int(injection.get("score", 0))
+    for detector in detectors:
+        if not callable(detector):
+            continue
+        result = detector({"text": text, "injection": injection, "metadata": metadata or {}, "options": options}) or []
+        findings = result if isinstance(result, list) else [result]
+        for finding in findings:
+            if not finding or not finding.get("id") or finding.get("id") in seen:
+                continue
+            seen.add(finding["id"])
+            detector_score = max(0, min(int(finding.get("score", 0)), 40))
+            matches.append({
+                "id": finding["id"],
+                "score": detector_score,
+                "reason": finding.get("reason", "Custom prompt detector triggered"),
+                "source": finding.get("source", "custom"),
+            })
+            score += detector_score
+    score = min(score, 100)
+    return {
+        **injection,
+        "matches": matches,
+        "score": score,
+        "level": _risk_level(score),
+        "blocked_by_default": score >= 45,
+    }
+
+
+def build_shield_options(options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(options or {})
+    preset_options = _resolve_shield_preset(payload.get("preset"))
+    return {
+        **preset_options,
+        **payload,
+        "shadow_policy_packs": _dedupe_list((preset_options.get("shadow_policy_packs") or []) + (payload.get("shadow_policy_packs") or [])),
+    }
+
+
+def _resolve_effective_shield_options(base_options: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    preset_options = _resolve_shield_preset(base_options.get("preset"))
+    route_policy = _resolve_route_policy(base_options.get("route_policies"), metadata)
+    route_preset_options = _resolve_shield_preset((route_policy or {}).get("preset"))
+    return {
+        **base_options,
+        **preset_options,
+        **route_preset_options,
+        **(route_policy or {}),
+        "shadow_policy_packs": _dedupe_list(
+            (preset_options.get("shadow_policy_packs") or [])
+            + (route_preset_options.get("shadow_policy_packs") or [])
+            + (base_options.get("shadow_policy_packs") or [])
+            + ((route_policy or {}).get("shadow_policy_packs") or [])
+        ),
+        "entity_detectors": (preset_options.get("entity_detectors") or [])
+            + (route_preset_options.get("entity_detectors") or [])
+            + (base_options.get("entity_detectors") or [])
+            + ((route_policy or {}).get("entity_detectors") or []),
+        "custom_prompt_detectors": (preset_options.get("custom_prompt_detectors") or [])
+            + (route_preset_options.get("custom_prompt_detectors") or [])
+            + (base_options.get("custom_prompt_detectors") or [])
+            + ((route_policy or {}).get("custom_prompt_detectors") or []),
+        "suppress_prompt_rules": _dedupe_list(
+            (preset_options.get("suppress_prompt_rules") or [])
+            + (route_preset_options.get("suppress_prompt_rules") or [])
+            + (base_options.get("suppress_prompt_rules") or [])
+            + ((route_policy or {}).get("suppress_prompt_rules") or [])
+        ),
+        "route_policy": route_policy,
     }
 
 
@@ -876,23 +1057,31 @@ class BlackwallShield:
     max_length: int = 5000
     allow_system_messages: bool = False
     shadow_mode: bool = False
+    preset: Optional[str] = None
     policy_pack: Optional[str] = None
     shadow_policy_packs: List[str] = field(default_factory=list)
     entity_detectors: List[Any] = field(default_factory=list)
+    custom_prompt_detectors: List[Any] = field(default_factory=list)
+    suppress_prompt_rules: List[str] = field(default_factory=list)
+    route_policies: List[Dict[str, Any]] = field(default_factory=list)
     detect_named_entities: bool = False
     semantic_scorer: Optional[Any] = None
     session_buffer: Optional[Any] = None
     token_budget_firewall: Optional[Any] = None
     system_prompt: Optional[str] = None
+    output_firewall_defaults: Dict[str, Any] = field(default_factory=dict)
     on_alert: Optional[Any] = None
     on_telemetry: Optional[Any] = None
     webhook_url: Optional[str] = None
 
     def inspect_text(self, text: Any) -> Dict[str, Any]:
-        pii = mask_value(text, include_originals=self.include_originals, max_length=self.max_length, synthetic_replacement=self.synthetic_replacement, entity_detectors=self.entity_detectors, detect_named_entities=self.detect_named_entities)
-        injection = detect_prompt_injection(text, max_length=self.max_length, semantic_scorer=self.semantic_scorer)
+        effective_options = _resolve_effective_shield_options(self.__dict__)
+        pii = mask_value(text, include_originals=effective_options["include_originals"], max_length=effective_options["max_length"], synthetic_replacement=effective_options["synthetic_replacement"], entity_detectors=effective_options["entity_detectors"], detect_named_entities=effective_options["detect_named_entities"])
+        injection = detect_prompt_injection(text, max_length=effective_options["max_length"], semantic_scorer=effective_options["semantic_scorer"])
+        injection = _apply_custom_prompt_detectors(injection, str(text or ""), effective_options)
+        injection = _apply_prompt_rule_suppressions(injection, effective_options.get("suppress_prompt_rules"))
         return {
-            "sanitized": pii.get("original", sanitize_text(text, max_length=self.max_length)),
+            "sanitized": pii.get("original", sanitize_text(text, max_length=effective_options["max_length"])),
             "prompt_injection": injection,
             "sensitive_data": {
                 "findings": pii["findings"],
@@ -916,35 +1105,38 @@ class BlackwallShield:
             self.on_telemetry(event)
 
     def guard_model_request(self, messages: Any, metadata: Optional[Dict[str, Any]] = None, allow_system_messages: Optional[bool] = None, compare_policy_packs: Optional[List[str]] = None) -> Dict[str, Any]:
-        effective_allow_system = self.allow_system_messages if allow_system_messages is None else allow_system_messages
+        effective_options = _resolve_effective_shield_options(self.__dict__, metadata)
+        effective_allow_system = effective_options["allow_system_messages"] if allow_system_messages is None else allow_system_messages
         normalized = normalize_messages(messages, allow_system_messages=effective_allow_system)
         masked = mask_messages(
             normalized,
-            include_originals=self.include_originals,
-            max_length=self.max_length,
+            include_originals=effective_options["include_originals"],
+            max_length=effective_options["max_length"],
             allow_system_messages=effective_allow_system,
-            synthetic_replacement=self.synthetic_replacement,
-            entity_detectors=self.entity_detectors,
-            detect_named_entities=self.detect_named_entities,
+            synthetic_replacement=effective_options["synthetic_replacement"],
+            entity_detectors=effective_options["entity_detectors"],
+            detect_named_entities=effective_options["detect_named_entities"],
         )
         prompt_candidate = [m for m in normalized if m["role"] != "assistant"]
-        if self.session_buffer and callable(getattr(self.session_buffer, "record", None)):
+        if effective_options["session_buffer"] and callable(getattr(effective_options["session_buffer"], "record", None)):
             for message in prompt_candidate:
-                self.session_buffer.record(message["content"])
-        session_context = self.session_buffer.render() if self.session_buffer and callable(getattr(self.session_buffer, "render", None)) else prompt_candidate
-        injection = detect_prompt_injection(session_context, max_length=self.max_length, semantic_scorer=self.semantic_scorer)
-        primary_policy = _resolve_policy_pack(self.policy_pack)
-        threshold = (primary_policy or {}).get("prompt_injection_threshold", self.prompt_injection_threshold)
-        would_block = self.block_on_prompt_injection and _compare_risk(injection["level"], threshold)
-        should_block = False if self.shadow_mode else would_block
-        should_notify = _compare_risk(injection["level"], self.notify_on_risk_level)
-        policy_names = list(dict.fromkeys((self.shadow_policy_packs or []) + (compare_policy_packs or [])))
-        policy_comparisons = [_evaluate_policy_pack(injection, name, self.prompt_injection_threshold) for name in policy_names]
-        budget_result = self.token_budget_firewall.inspect(
+                effective_options["session_buffer"].record(message["content"])
+        session_context = effective_options["session_buffer"].render() if effective_options["session_buffer"] and callable(getattr(effective_options["session_buffer"], "render", None)) else prompt_candidate
+        injection = detect_prompt_injection(session_context, max_length=effective_options["max_length"], semantic_scorer=effective_options["semantic_scorer"])
+        injection = _apply_custom_prompt_detectors(injection, json.dumps(session_context) if isinstance(session_context, list) else str(session_context or ""), effective_options, metadata)
+        injection = _apply_prompt_rule_suppressions(injection, effective_options.get("suppress_prompt_rules"))
+        primary_policy = _resolve_policy_pack(effective_options["policy_pack"])
+        threshold = (primary_policy or {}).get("prompt_injection_threshold", effective_options["prompt_injection_threshold"])
+        would_block = effective_options["block_on_prompt_injection"] and _compare_risk(injection["level"], threshold)
+        should_block = False if effective_options["shadow_mode"] else would_block
+        should_notify = _compare_risk(injection["level"], effective_options["notify_on_risk_level"])
+        policy_names = list(dict.fromkeys((effective_options["shadow_policy_packs"] or []) + (compare_policy_packs or [])))
+        policy_comparisons = [_evaluate_policy_pack(injection, name, effective_options["prompt_injection_threshold"]) for name in policy_names]
+        budget_result = effective_options["token_budget_firewall"].inspect(
             user_id=str((metadata or {}).get("userId") or (metadata or {}).get("user_id") or "anonymous"),
             tenant_id=str((metadata or {}).get("tenantId") or (metadata or {}).get("tenant_id") or "default"),
             messages=normalized,
-        ) if self.token_budget_firewall else {"allowed": True, "estimated_tokens": _estimate_token_count(normalized)}
+        ) if effective_options["token_budget_firewall"] else {"allowed": True, "estimated_tokens": _estimate_token_count(normalized)}
 
         report = {
             "package": "blackwall-llm-shield-python",
@@ -957,7 +1149,7 @@ class BlackwallShield:
                 "has_sensitive_data": masked["has_sensitive_data"],
             },
             "enforcement": {
-                "shadow_mode": self.shadow_mode,
+                "shadow_mode": effective_options["shadow_mode"],
                 "would_block": would_block or not budget_result["allowed"],
                 "blocked": should_block or not budget_result["allowed"],
                 "threshold": threshold,
@@ -965,6 +1157,13 @@ class BlackwallShield:
             "policy_pack": primary_policy["name"] if primary_policy else None,
             "policy_comparisons": policy_comparisons,
             "token_budget": budget_result,
+            "core_interfaces": CORE_INTERFACES,
+            "route_policy": {
+                "route": (metadata or {}).get("route") or (metadata or {}).get("path"),
+                "suppress_prompt_rules": (effective_options.get("route_policy") or {}).get("suppress_prompt_rules", []),
+                "policy_pack": (effective_options.get("route_policy") or {}).get("policy_pack"),
+                "preset": (effective_options.get("route_policy") or {}).get("preset"),
+            } if effective_options.get("route_policy") else None,
             "telemetry": {
                 "event_type": "llm_request_reviewed",
                 "prompt_injection_rule_hits": _count_findings_by_type(injection["matches"]),
@@ -979,7 +1178,7 @@ class BlackwallShield:
         self._emit_telemetry(_create_telemetry_event("llm_request_reviewed", {
             "metadata": metadata or {},
             "blocked": should_block or not budget_result["allowed"],
-            "shadow_mode": self.shadow_mode,
+            "shadow_mode": effective_options["shadow_mode"],
             "report": report,
         }))
 
@@ -1002,20 +1201,22 @@ class BlackwallShield:
         }
 
     def review_model_response(self, output: Any, metadata: Optional[Dict[str, Any]] = None, output_firewall: Optional["OutputFirewall"] = None, firewall_options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        primary_policy = _resolve_policy_pack(self.policy_pack)
-        options = firewall_options or {}
+        effective_options = _resolve_effective_shield_options(self.__dict__, metadata)
+        primary_policy = _resolve_policy_pack(effective_options["policy_pack"])
+        options = {**effective_options.get("output_firewall_defaults", {}), **(firewall_options or {})}
         firewall = output_firewall or OutputFirewall(
             risk_threshold=(primary_policy or {}).get("output_risk_threshold", "high"),
-            system_prompt=self.system_prompt,
+            system_prompt=effective_options["system_prompt"],
             **options,
         )
-        review = firewall.inspect(output, system_prompt=self.system_prompt, **options)
+        review = firewall.inspect(output, system_prompt=effective_options["system_prompt"], **options)
         report = {
             "package": "blackwall-llm-shield-python",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "metadata": metadata or {},
             "output_review": {
                 **review,
+                "core_interfaces": CORE_INTERFACES,
                 "telemetry": {
                     "event_type": "llm_output_reviewed",
                     "finding_counts": _count_findings_by_type(review["findings"]),
@@ -1079,6 +1280,34 @@ class BlackwallShield:
             "response": response,
             "review": review,
         }
+
+    def protect_with_adapter(self, adapter: Any, messages: Any, metadata: Optional[Dict[str, Any]] = None, allow_system_messages: Optional[bool] = None, compare_policy_packs: Optional[List[str]] = None, output_firewall: Optional["OutputFirewall"] = None, firewall_options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if not adapter or not callable(getattr(adapter, "invoke", None)):
+            raise TypeError("adapter.invoke must be callable")
+
+        def _call_model(payload: Dict[str, Any]) -> Any:
+            result = adapter.invoke(payload)
+            if isinstance(result, dict) and "response" in result:
+                return result["response"]
+            return result
+
+        def _map_output(response: Any, request_result: Dict[str, Any]) -> Any:
+            if callable(getattr(adapter, "extract_output", None)):
+                return adapter.extract_output(response, request_result)
+            if isinstance(response, dict) and "output" in response:
+                return response["output"]
+            return response
+
+        return self.protect_model_call(
+            messages=messages,
+            call_model=_call_model,
+            metadata=metadata,
+            allow_system_messages=allow_system_messages,
+            compare_policy_packs=compare_policy_packs,
+            map_output=_map_output,
+            output_firewall=output_firewall,
+            firewall_options=firewall_options,
+        )
 
 
 class OutputFirewall:

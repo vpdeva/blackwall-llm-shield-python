@@ -8,6 +8,11 @@
 - Added `PolicyLearningLoop` for approval-history-based policy suggestions
 - Added JWT-style passport tokens in `AgentIdentityRegistry`
 
+## 0.2.4
+
+- Added wiki-ready example guides and linked them from the main README
+- Updated repository hygiene with broader `.gitignore` coverage for local editor and build artifacts
+
 ## 0.2.3
 
 - Clarified the standalone install story for Python so the core package remains lightweight while integrations and semantic tooling stay opt-in

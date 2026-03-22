@@ -121,6 +121,34 @@ SHIELD_PRESETS = {
         "notify_on_risk_level": "medium",
         "shadow_mode": False,
     },
+    "agent_planner": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "medium",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": True,
+        "shadow_policy_packs": ["government"],
+    },
+    "document_review": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "high",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": True,
+        "policy_pack": "healthcare",
+    },
+    "rag_search": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "medium",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": True,
+        "shadow_policy_packs": ["government"],
+    },
+    "tool_calling": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "medium",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": False,
+        "policy_pack": "finance",
+    },
 }
 
 CORE_INTERFACE_VERSION = "1.0"
@@ -128,6 +156,7 @@ CORE_INTERFACES = {
     "guard_model_request": CORE_INTERFACE_VERSION,
     "review_model_response": CORE_INTERFACE_VERSION,
     "protect_model_call": CORE_INTERFACE_VERSION,
+    "protect_json_model_call": CORE_INTERFACE_VERSION,
     "protect_with_adapter": CORE_INTERFACE_VERSION,
     "tool_permission_firewall": CORE_INTERFACE_VERSION,
     "retrieval_sanitizer": CORE_INTERFACE_VERSION,
@@ -454,6 +483,7 @@ def summarize_operational_telemetry(events: Optional[List[Dict[str, Any]]] = Non
         "shadow_mode_events": 0,
         "by_type": {},
         "by_route": {},
+        "by_feature": {},
         "by_tenant": {},
         "by_model": {},
         "by_policy_outcome": {
@@ -463,11 +493,14 @@ def summarize_operational_telemetry(events: Optional[List[Dict[str, Any]]] = Non
         },
         "top_rules": {},
         "highest_severity": "low",
+        "noisiest_routes": [],
+        "weekly_block_estimate": 0,
     }
     for event in events or []:
         event_type = str((event or {}).get("type") or "unknown")
         metadata = (event or {}).get("metadata") or {}
         route = str(metadata.get("route") or metadata.get("path") or "unknown")
+        feature = str(metadata.get("feature") or metadata.get("capability") or route)
         tenant = str(metadata.get("tenant_id") or metadata.get("tenantId") or "unknown")
         model = str(metadata.get("model") or metadata.get("model_name") or "unknown")
         report = (event or {}).get("report") or {}
@@ -478,6 +511,7 @@ def summarize_operational_telemetry(events: Optional[List[Dict[str, Any]]] = Non
         summary["total_events"] += 1
         summary["by_type"][event_type] = summary["by_type"].get(event_type, 0) + 1
         summary["by_route"][route] = summary["by_route"].get(route, 0) + 1
+        summary["by_feature"][feature] = summary["by_feature"].get(feature, 0) + 1
         summary["by_tenant"][tenant] = summary["by_tenant"].get(tenant, 0) + 1
         summary["by_model"][model] = summary["by_model"].get(model, 0) + 1
         if event.get("blocked"):
@@ -495,7 +529,18 @@ def summarize_operational_telemetry(events: Optional[List[Dict[str, Any]]] = Non
         if _severity_weight(severity) > _severity_weight(summary["highest_severity"]):
             summary["highest_severity"] = severity
     summary["top_rules"] = dict(sorted(summary["top_rules"].items(), key=lambda item: item[1], reverse=True)[:10])
+    summary["noisiest_routes"] = [
+        {"route": route, "count": count}
+        for route, count in sorted(summary["by_route"].items(), key=lambda item: item[1], reverse=True)[:5]
+    ]
+    summary["weekly_block_estimate"] = summary["by_policy_outcome"]["blocked"] + summary["by_policy_outcome"]["shadow_blocked"]
     return summary
+
+
+def parse_json_output(output: Any) -> Any:
+    if isinstance(output, str):
+        return json.loads(output)
+    return output
 
 
 def _resolve_effective_shield_options(base_options: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1459,6 +1504,56 @@ class BlackwallShield:
             output_firewall=output_firewall,
             firewall_options=firewall_options,
         )
+
+    def protect_json_model_call(self, messages: Any, call_model: Any, metadata: Optional[Dict[str, Any]] = None, allow_system_messages: Optional[bool] = None, compare_policy_packs: Optional[List[str]] = None, map_messages: Optional[Any] = None, map_output: Optional[Any] = None, output_firewall: Optional["OutputFirewall"] = None, firewall_options: Optional[Dict[str, Any]] = None, required_schema: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        result = self.protect_model_call(
+            messages=messages,
+            call_model=call_model,
+            metadata=metadata,
+            allow_system_messages=allow_system_messages,
+            compare_policy_packs=compare_policy_packs,
+            map_messages=map_messages,
+            map_output=map_output,
+            output_firewall=output_firewall,
+            firewall_options=firewall_options,
+        )
+        if result["blocked"]:
+            return result
+        try:
+            parsed = parse_json_output(result["review"].get("masked_output") if isinstance(result.get("review"), dict) else result.get("response"))
+            schema_valid = validate_required_schema(parsed, required_schema)
+            if not schema_valid:
+                return {
+                    **result,
+                    "allowed": False,
+                    "blocked": True,
+                    "stage": "output",
+                    "reason": "Model output failed JSON schema validation",
+                    "json": {
+                        "parsed": parsed,
+                        "schema_valid": False,
+                    },
+                }
+            return {
+                **result,
+                "json": {
+                    "parsed": parsed,
+                    "schema_valid": True,
+                },
+            }
+        except Exception as error:
+            return {
+                **result,
+                "allowed": False,
+                "blocked": True,
+                "stage": "output",
+                "reason": "Model output is not valid JSON",
+                "json": {
+                    "parsed": None,
+                    "schema_valid": False,
+                    "parse_error": str(error),
+                },
+            }
 
 
 class OutputFirewall:

@@ -91,7 +91,7 @@ Run `python -m blackwall_llm_shield.ui` for a local dashboard, or build from [`D
 
 Front door for message normalization, masking, prompt-injection detection, alerting, and policy decisions.
 
-It also exposes `protect_model_call()`, `protect_with_adapter()`, and `review_model_response()` so you can enforce request checks before provider calls and inspect outputs before they reach users or agents.
+It also exposes `protect_model_call()`, `protect_json_model_call()`, `protect_with_adapter()`, and `review_model_response()` so you can enforce request checks before provider calls and inspect outputs before they reach users or agents.
 
 ### `OutputFirewall`
 
@@ -117,6 +117,10 @@ Recommended presets:
 - `strict` for high-sensitivity routes
 - `rag_safe` for retrieval-heavy flows
 - `agent_tools` for tool-calling and approval-gated agent actions
+- `agent_planner` for JSON-heavy planner and internal ops routes
+- `document_review` for classification and document-review pipelines
+- `rag_search` for search-heavy retrieval endpoints
+- `tool_calling` for routes that broker external actions
 
 ## Example Workflow
 
@@ -147,6 +151,21 @@ result = shield.protect_with_adapter(
 
 print(result["stage"], result["allowed"])
 print(telemetry[-1]["type"])
+```
+
+## Strict JSON Workflow Pattern
+
+```python
+import json
+
+result = shield.protect_json_model_call(
+    [{"role": "user", "content": "Return the shipment triage plan as JSON."}],
+    lambda _: json.dumps({"steps": ["triage", "notify-ops"]}),
+    metadata={"route": "/api/planner", "feature": "planner"},
+    required_schema={"steps": "list"},
+)
+
+print(result["json"]["parsed"])
 ```
 
 ## Route Policies
@@ -203,11 +222,39 @@ tool_firewall = ToolPermissionFirewall(
 )
 ```
 
+For document review and verification:
+
+```python
+shield = BlackwallShield(
+    preset="document_review",
+    route_policies=[
+        {
+            "route": "/api/verify",
+            "options": {
+                "shadow_mode": True,
+                "output_firewall_defaults": {"required_schema": {"verdict": "str"}},
+            },
+        },
+    ],
+)
+```
+
+## Choose Your Integration Path
+
+- Request-only guard: `guard_model_request()`
+- Request + output review: `protect_model_call()`
+- Strict JSON planner/document workflows: `protect_json_model_call()`
+- Full provider wrapper: `protect_with_adapter()`
+- Tool firewall + RAG sanitizer: `ToolPermissionFirewall` + `RetrievalSanitizer`
+
 ## Operational Telemetry Summaries
 
 ```python
 summary = summarize_operational_telemetry(events)
 print(summary["by_route"])
+print(summary["by_feature"])
+print(summary["noisiest_routes"])
+print(summary["weekly_block_estimate"])
 print(summary["by_tenant"])
 print(summary["by_model"])
 print(summary["highest_severity"])
@@ -249,6 +296,8 @@ The Python package ships a stable provider-adapter contract for:
 - OpenRouter
 
 The intended direction is to keep widening support without changing the wrapper contract applications call.
+
+For Gemini-heavy apps, the bundled adapter now preserves system instructions plus mixed text/image/file parts so direct SDK calls need less compatibility glue.
 
 ## Rollout Notes
 

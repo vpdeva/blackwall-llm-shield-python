@@ -23,6 +23,42 @@ def _stringify_content(content: Any) -> str:
     return str(content or "")
 
 
+def _to_gemini_part(item: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(item, str):
+        return {"text": item}
+    if not isinstance(item, dict):
+        return None
+    if item.get("type") in {"text", "input_text"} and isinstance(item.get("text"), str):
+        return {"text": item["text"]}
+    if item.get("type") == "image_url" and isinstance(item.get("image_url"), str):
+        return {"file_data": {"file_uri": item["image_url"]}}
+    if item.get("type") == "file":
+        if isinstance(item.get("file_data"), dict):
+            return {"inline_data": item["file_data"]}
+        if isinstance(item.get("file_uri"), str):
+            return {"file_data": {"file_uri": item["file_uri"]}}
+        if isinstance(item.get("file_id"), str):
+            return {"file_data": {"file_uri": item["file_id"]}}
+    if item.get("type") == "json" and isinstance(item.get("value"), str):
+        return {"text": item["value"]}
+    if isinstance(item.get("text"), str):
+        return {"text": item["text"]}
+    return None
+
+
+def _to_gemini_parts(content: Any) -> List[Dict[str, Any]]:
+    if isinstance(content, str):
+        return [{"text": content}]
+    if isinstance(content, list):
+        return [part for part in (_to_gemini_part(item) for item in content) if part]
+    if isinstance(content, dict):
+        if isinstance(content.get("parts"), list):
+            return _to_gemini_parts(content["parts"])
+        part = _to_gemini_part(content)
+        return [part] if part else [{"text": _stringify_content(content)}]
+    return [{"text": str(content or "")}]
+
+
 def _to_openai_input(messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     return [{"role": message["role"], "content": _stringify_content(message.get("content"))} for message in messages]
 
@@ -144,24 +180,45 @@ def create_gemini_adapter(client: Any, model: str, request: Optional[Dict[str, A
 
     def _invoke(payload: Dict[str, Any]) -> Dict[str, Any]:
         messages = payload.get("messages") or []
+        system_instruction = _extract_system_prompt(messages)
         response = client.models.generate_content(
             model=model,
             contents=[
                 {
                     "role": "model" if message["role"] == "assistant" else "user",
-                    "parts": [{"text": _stringify_content(message.get("content"))}],
+                    "parts": _to_gemini_parts(message.get("content")),
                 }
                 for message in messages
+                if message["role"] != "system"
             ],
+            **({"system_instruction": {"parts": [{"text": system_instruction}]}} if system_instruction else {}),
             **(request or {}),
         )
-        text = getattr(response, "text", None) if not isinstance(response, dict) else response.get("text")
-        return {"response": response, "output": text or ""}
+        return {"response": response, "output": _extract(response)}
 
     def _extract(response: Any, _: Optional[Dict[str, Any]] = None) -> Any:
         if callable(extract_output):
             return extract_output(response)
-        return (response.get("text") if isinstance(response, dict) else getattr(response, "text", "")) or ""
+        if isinstance(response, dict):
+            if response.get("text"):
+                return response.get("text") or ""
+            candidates = response.get("candidates") or []
+            parts = []
+            for candidate in candidates:
+                for part in (((candidate or {}).get("content") or {}).get("parts") or []):
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        parts.append(part["text"])
+            return "\n".join(part for part in parts if part)
+        if getattr(response, "text", None):
+            return getattr(response, "text")
+        candidates = getattr(response, "candidates", None) or []
+        parts = []
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            for part in getattr(content, "parts", None) or []:
+                if isinstance(getattr(part, "text", None), str):
+                    parts.append(part.text)
+        return "\n".join(part for part in parts if part)
 
     return ProviderAdapter(provider="gemini", invoke=_invoke, extract_output=_extract)
 

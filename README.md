@@ -89,6 +89,10 @@ Enterprise deployments can also enrich emitted events with SSO/user context and 
 
 Use `BlackwallFastAPIMiddleware`, `create_flask_middleware()`, `create_langchain_callbacks()`, or `create_llamaindex_callback()` to wire Blackwall into framework or orchestration entry points with less glue code.
 
+### Example guide
+
+Use the wiki-ready examples page at [`wiki/Running-Examples.md`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/wiki/Running-Examples.md) for copy-paste setup and run commands.
+
 ### Zero-config UI and sidecar
 
 Run `python -m blackwall_llm_shield.ui` for a local dashboard, or build from [`Dockerfile`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/Dockerfile) to expose Blackwall as a local sidecar proxy for non-Python stacks.
@@ -395,6 +399,7 @@ Produces signed events you can summarize into operations dashboards or audit pip
 - [`examples/python-fastapi/main.py`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/examples/python-fastapi/main.py)
 - [`examples/python-fastapi/dashboard_model.py`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/examples/python-fastapi/dashboard_model.py)
 - [`examples/python-fastapi/streamlit_app.py`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/examples/python-fastapi/streamlit_app.py)
+- [`wiki/Running-Examples.md`](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/wiki/Running-Examples.md)
 
 ## Release Commands
 

@@ -71,7 +71,7 @@ Use `create_openai_adapter()`, `create_anthropic_adapter()`, `create_gemini_adap
 
 ### Observability and control-plane support
 
-Use `summarize_operational_telemetry()` with emitted telemetry events when you want route-level summaries, blocked-event counts, and rollout visibility for operators.
+Use `summarize_operational_telemetry()` with emitted telemetry events when you want route-level, tenant-level, and model-level summaries, blocked-event counts, and rollout visibility for operators.
 
 ### Output grounding and tone review
 
@@ -208,6 +208,8 @@ tool_firewall = ToolPermissionFirewall(
 ```python
 summary = summarize_operational_telemetry(events)
 print(summary["by_route"])
+print(summary["by_tenant"])
+print(summary["by_model"])
 print(summary["highest_severity"])
 ```
 
@@ -236,6 +238,17 @@ Produces signed events you can summarize into operations dashboards or audit pip
 
 - See [MIGRATING.md](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/MIGRATING.md) for compatibility notes and stable contract guidance
 - See [BENCHMARKS.md](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/BENCHMARKS.md) for baseline latency numbers and regression coverage
+
+## Provider Coverage
+
+The Python package ships a stable provider-adapter contract for:
+
+- OpenAI
+- Anthropic
+- Gemini
+- OpenRouter
+
+The intended direction is to keep widening support without changing the wrapper contract applications call.
 
 ## Rollout Notes
 

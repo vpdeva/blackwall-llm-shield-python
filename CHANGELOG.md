@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6
+
+- Added production-ready telemetry summaries grouped by route, tenant, model, policy outcome, and top rules
+- Expanded provider and rollout docs for better operator trust
+- Improved benchmark guidance with clearer shadow-mode reporting questions
+
 ## 0.1.5
 
 - Added route-level operational telemetry summaries for easier rollout visibility

@@ -454,12 +454,22 @@ def summarize_operational_telemetry(events: Optional[List[Dict[str, Any]]] = Non
         "shadow_mode_events": 0,
         "by_type": {},
         "by_route": {},
+        "by_tenant": {},
+        "by_model": {},
+        "by_policy_outcome": {
+            "blocked": 0,
+            "shadow_blocked": 0,
+            "allowed": 0,
+        },
+        "top_rules": {},
         "highest_severity": "low",
     }
     for event in events or []:
         event_type = str((event or {}).get("type") or "unknown")
         metadata = (event or {}).get("metadata") or {}
         route = str(metadata.get("route") or metadata.get("path") or "unknown")
+        tenant = str(metadata.get("tenant_id") or metadata.get("tenantId") or "unknown")
+        model = str(metadata.get("model") or metadata.get("model_name") or "unknown")
         report = (event or {}).get("report") or {}
         if report.get("output_review"):
             severity = report["output_review"].get("severity", "low")
@@ -468,12 +478,23 @@ def summarize_operational_telemetry(events: Optional[List[Dict[str, Any]]] = Non
         summary["total_events"] += 1
         summary["by_type"][event_type] = summary["by_type"].get(event_type, 0) + 1
         summary["by_route"][route] = summary["by_route"].get(route, 0) + 1
+        summary["by_tenant"][tenant] = summary["by_tenant"].get(tenant, 0) + 1
+        summary["by_model"][model] = summary["by_model"].get(model, 0) + 1
         if event.get("blocked"):
             summary["blocked_events"] += 1
+            summary["by_policy_outcome"]["blocked"] += 1
         if event.get("shadow_mode"):
             summary["shadow_mode_events"] += 1
+            if not event.get("blocked"):
+                summary["by_policy_outcome"]["shadow_blocked"] += 1
+        if not event.get("blocked") and not event.get("shadow_mode"):
+            summary["by_policy_outcome"]["allowed"] += 1
+        rules = [item.get("id") for item in ((report.get("prompt_injection") or {}).get("matches") or []) if item.get("id")]
+        for rule in rules:
+            summary["top_rules"][rule] = summary["top_rules"].get(rule, 0) + 1
         if _severity_weight(severity) > _severity_weight(summary["highest_severity"]):
             summary["highest_severity"] = severity
+    summary["top_rules"] = dict(sorted(summary["top_rules"].items(), key=lambda item: item[1], reverse=True)[:10])
     return summary
 
 

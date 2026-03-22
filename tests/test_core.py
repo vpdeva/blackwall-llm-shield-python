@@ -394,12 +394,16 @@ class ShieldTests(unittest.TestCase):
 
     def test_operational_telemetry_summarizer_groups_events_by_route_and_severity(self):
       summary = summarize_operational_telemetry([
-          {"type": "llm_request_reviewed", "metadata": {"route": "/api/chat"}, "blocked": False, "shadow_mode": True, "report": {"prompt_injection": {"level": "medium"}}},
-          {"type": "llm_output_reviewed", "metadata": {"route": "/api/chat"}, "blocked": True, "report": {"output_review": {"severity": "high"}}},
+          {"type": "llm_request_reviewed", "metadata": {"route": "/api/chat", "tenant_id": "t1", "model": "gpt-4.1-mini"}, "blocked": False, "shadow_mode": True, "report": {"prompt_injection": {"level": "medium", "matches": [{"id": "ignore_instructions"}]}}},
+          {"type": "llm_output_reviewed", "metadata": {"route": "/api/chat", "tenant_id": "t1", "model": "gpt-4.1-mini"}, "blocked": True, "report": {"output_review": {"severity": "high"}}},
       ])
       self.assertEqual(summary["total_events"], 2)
       self.assertEqual(summary["by_route"]["/api/chat"], 2)
+      self.assertEqual(summary["by_tenant"]["t1"], 2)
+      self.assertEqual(summary["by_model"]["gpt-4.1-mini"], 2)
       self.assertEqual(summary["blocked_events"], 1)
+      self.assertEqual(summary["by_policy_outcome"]["shadow_blocked"], 1)
+      self.assertEqual(summary["top_rules"]["ignore_instructions"], 1)
       self.assertEqual(summary["highest_severity"], "high")
 
     def test_agent_identity_registry_can_issue_and_verify_ephemeral_tokens(self):

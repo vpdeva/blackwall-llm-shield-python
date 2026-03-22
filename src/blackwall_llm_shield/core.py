@@ -109,6 +109,18 @@ SHIELD_PRESETS = {
         "shadow_mode": True,
         "allow_system_messages": True,
     },
+    "rag_safe": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "medium",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": True,
+    },
+    "agent_tools": {
+        "block_on_prompt_injection": True,
+        "prompt_injection_threshold": "medium",
+        "notify_on_risk_level": "medium",
+        "shadow_mode": False,
+    },
 }
 
 CORE_INTERFACE_VERSION = "1.0"
@@ -191,6 +203,79 @@ def sanitize_text(text: Any, max_length: int = 5000) -> str:
     text = text.replace("{{", "{ {").replace("}}", "} }")
     text = re.sub(r"<\|.*?\|>", "", text)
     return text.strip()[:max_length]
+
+
+def stringify_message_content(content: Any, max_length: int = 5000) -> str:
+    if isinstance(content, str):
+        return sanitize_text(content, max_length=max_length)
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(sanitize_text(item, max_length=max_length))
+            elif isinstance(item, dict):
+                if isinstance(item.get("text"), str) and item.get("type") in {"text", "input_text", None}:
+                    parts.append(sanitize_text(item["text"], max_length=max_length))
+                elif item.get("type") == "image_url":
+                    parts.append("[IMAGE_CONTENT]")
+                elif item.get("type") == "file":
+                    parts.append("[FILE_CONTENT]")
+        return "\n".join(part for part in parts if part)
+    if isinstance(content, dict):
+        if isinstance(content.get("text"), str):
+            return sanitize_text(content["text"], max_length=max_length)
+        if isinstance(content.get("parts"), list):
+            return stringify_message_content(content["parts"], max_length=max_length)
+        return sanitize_text(json.dumps(content), max_length=max_length)
+    return sanitize_text(str(content or ""), max_length=max_length)
+
+
+def normalize_content_parts(content: Any, max_length: int = 5000) -> List[Dict[str, Any]]:
+    if isinstance(content, str):
+        clean = sanitize_text(content, max_length=max_length)
+        return [{"type": "text", "text": clean}] if clean else []
+    if isinstance(content, list):
+        parts: List[Dict[str, Any]] = []
+        for item in content:
+            if isinstance(item, str):
+                clean = sanitize_text(item, max_length=max_length)
+                if clean:
+                    parts.append({"type": "text", "text": clean})
+            elif isinstance(item, dict):
+                if isinstance(item.get("text"), str) and item.get("type") in {"text", "input_text", None}:
+                    parts.append({**item, "text": sanitize_text(item["text"], max_length=max_length)})
+                else:
+                    parts.append(dict(item))
+        return parts
+    if isinstance(content, dict):
+        if isinstance(content.get("parts"), list):
+            return normalize_content_parts(content["parts"], max_length=max_length)
+        if isinstance(content.get("text"), str):
+            return [{**content, "text": sanitize_text(content["text"], max_length=max_length)}]
+        return [{"type": "json", "value": sanitize_text(json.dumps(content), max_length=max_length)}]
+    return []
+
+
+def mask_content_parts(parts: Optional[List[Dict[str, Any]]] = None, include_originals: bool = False, max_length: int = 5000, synthetic_replacement: bool = False, entity_detectors: Optional[List[Any]] = None, detect_named_entities: bool = False) -> Dict[str, Any]:
+    findings: List[Dict[str, Any]] = []
+    vault: Dict[str, str] = {}
+    masked_parts: List[Dict[str, Any]] = []
+    for part in parts or []:
+        if not isinstance(part, dict):
+            masked_parts.append(part)
+            continue
+        text_value = part.get("text") if isinstance(part.get("text"), str) else (part.get("value") if part.get("type") == "json" and isinstance(part.get("value"), str) else None)
+        if text_value is None:
+            masked_parts.append(dict(part))
+            continue
+        result = mask_value(text_value, include_originals=include_originals, max_length=max_length, synthetic_replacement=synthetic_replacement, entity_detectors=entity_detectors, detect_named_entities=detect_named_entities)
+        findings.extend(result["findings"])
+        vault.update(result["vault"])
+        if isinstance(part.get("text"), str):
+            masked_parts.append({**part, "text": result["masked"]})
+        else:
+            masked_parts.append({**part, "value": result["masked"]})
+    return {"masked_parts": masked_parts, "findings": findings, "vault": vault}
 
 
 def _placeholder(kind: str, index: int) -> str:
@@ -360,6 +445,36 @@ def build_shield_options(options: Optional[Dict[str, Any]] = None) -> Dict[str, 
         **payload,
         "shadow_policy_packs": _dedupe_list((preset_options.get("shadow_policy_packs") or []) + (payload.get("shadow_policy_packs") or [])),
     }
+
+
+def summarize_operational_telemetry(events: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    summary = {
+        "total_events": 0,
+        "blocked_events": 0,
+        "shadow_mode_events": 0,
+        "by_type": {},
+        "by_route": {},
+        "highest_severity": "low",
+    }
+    for event in events or []:
+        event_type = str((event or {}).get("type") or "unknown")
+        metadata = (event or {}).get("metadata") or {}
+        route = str(metadata.get("route") or metadata.get("path") or "unknown")
+        report = (event or {}).get("report") or {}
+        if report.get("output_review"):
+            severity = report["output_review"].get("severity", "low")
+        else:
+            severity = ((report.get("prompt_injection") or {}).get("level")) or "low"
+        summary["total_events"] += 1
+        summary["by_type"][event_type] = summary["by_type"].get(event_type, 0) + 1
+        summary["by_route"][route] = summary["by_route"].get(route, 0) + 1
+        if event.get("blocked"):
+            summary["blocked_events"] += 1
+        if event.get("shadow_mode"):
+            summary["shadow_mode_events"] += 1
+        if _severity_weight(severity) > _severity_weight(summary["highest_severity"]):
+            summary["highest_severity"] = severity
+    return summary
 
 
 def _resolve_effective_shield_options(base_options: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -714,7 +829,9 @@ def mask_value(value: Any, include_originals: bool = False, max_length: int = 50
 def normalize_messages(messages: Any, allow_system_messages: bool = False, max_messages: int = 20) -> List[Dict[str, str]]:
     normalized: List[Dict[str, str]] = []
     for message in (messages or [])[-max_messages:]:
-        content = sanitize_text((message or {}).get("content", ""))
+        original_content = (message or {}).get("content", "")
+        parts = [] if isinstance(original_content, str) else normalize_content_parts(original_content)
+        content = stringify_message_content(original_content)
         if not content:
             continue
         role = "user"
@@ -722,7 +839,10 @@ def normalize_messages(messages: Any, allow_system_messages: bool = False, max_m
             role = "assistant"
         elif message.get("role") == "system" and allow_system_messages and message.get("trusted"):
             role = "system"
-        normalized.append({"role": role, "content": content})
+        payload = {"role": role, "content": content}
+        if parts:
+            payload["content_parts"] = parts
+        normalized.append(payload)
     return normalized
 
 
@@ -731,17 +851,27 @@ def mask_messages(messages: Any, include_originals: bool = False, max_length: in
     vault: Dict[str, str] = {}
     masked_messages: List[Dict[str, str]] = []
     for message in (messages or []):
-        content = sanitize_text((message or {}).get("content", ""), max_length=max_length)
+        parts = (message or {}).get("content_parts") if isinstance((message or {}).get("content_parts"), list) else ([] if isinstance((message or {}).get("content", ""), str) else normalize_content_parts((message or {}).get("content", ""), max_length=max_length))
+        content = stringify_message_content((message or {}).get("content", ""), max_length=max_length)
         if not content:
             continue
         role = "system" if (message or {}).get("role") == "system" else ("assistant" if (message or {}).get("role") == "assistant" else "user")
         if role == "system":
-            masked_messages.append({"role": role, "content": content})
+            payload = {"role": role, "content": content}
+            if parts:
+                payload["content_parts"] = parts
+            masked_messages.append(payload)
             continue
         result = mask_value(content, include_originals=include_originals, max_length=max_length, synthetic_replacement=synthetic_replacement, entity_detectors=entity_detectors, detect_named_entities=detect_named_entities)
+        parts_result = mask_content_parts(parts, include_originals=include_originals, max_length=max_length, synthetic_replacement=synthetic_replacement, entity_detectors=entity_detectors, detect_named_entities=detect_named_entities)
         findings.extend(result["findings"])
+        findings.extend(parts_result["findings"])
         vault.update(result["vault"])
-        masked_messages.append({"role": role, "content": result["masked"]})
+        vault.update(parts_result["vault"])
+        payload = {"role": role, "content": result["masked"]}
+        if parts_result["masked_parts"]:
+            payload["content_parts"] = parts_result["masked_parts"]
+        masked_messages.append(payload)
     return {"masked": masked_messages, "findings": findings, "has_sensitive_data": len(findings) > 0, "vault": vault}
 
 

@@ -14,6 +14,8 @@ Python security toolkit for AI applications and LLM-enabled services. Blackwall 
 - Emits structured telemetry for prompt risk, masking volume, and output review outcomes
 - Includes first-class provider adapters for OpenAI, Anthropic, Gemini, and OpenRouter
 - Inspects outputs for leakage, unsafe code, grounding drift, and tone violations
+- Handles mixed text, image, and file message parts more gracefully in text-first multimodal flows
+- Adds operator-friendly telemetry summaries and stronger presets for RAG and agent-tool workflows
 - Ships drop-in FastAPI/Flask middleware and LangChain/LlamaIndex callback helpers
 - Enforces tool permissions and approval gates
 - Sanitizes retrieval documents for RAG pipelines
@@ -67,6 +69,10 @@ Use `shadow_mode` with `shadow_policy_packs` or `compare_policy_packs` to measur
 
 Use `create_openai_adapter()`, `create_anthropic_adapter()`, `create_gemini_adapter()`, or `create_openrouter_adapter()` with `protect_with_adapter()` when you want Blackwall to wrap the provider call end to end.
 
+### Observability and control-plane support
+
+Use `summarize_operational_telemetry()` with emitted telemetry events when you want route-level summaries, blocked-event counts, and rollout visibility for operators.
+
 ### Output grounding and tone review
 
 `OutputFirewall` can compare a response to retrieval documents and flag unsupported claims or unprofessional tone before the answer leaves your service.
@@ -100,6 +106,17 @@ Protects tool execution with allowlists, blocklists, validators, and approval-re
 Helps keep hostile or manipulative text in retrieved documents from becoming model instructions.
 
 Pair it with `protect_model_call()` by passing sanitized documents into `firewall_options={"retrieval_documents": docs}` and gate any tool or admin action with `ToolPermissionFirewall`.
+
+### Contract Stability
+
+The 0.1.x line treats `guard_model_request()`, `protect_with_adapter()`, `review_model_response()`, `ToolPermissionFirewall`, and `RetrievalSanitizer` as the long-term integration contracts. The exported `CORE_INTERFACES` map can be logged or asserted by applications that want to pin expected behavior.
+
+Recommended presets:
+
+- `shadow_first` for low-friction rollout
+- `strict` for high-sensitivity routes
+- `rag_safe` for retrieval-heavy flows
+- `agent_tools` for tool-calling and approval-gated agent actions
 
 ## Example Workflow
 
@@ -156,6 +173,44 @@ shield = BlackwallShield(
 )
 ```
 
+## Route and Domain Examples
+
+For RAG:
+
+```python
+shield = BlackwallShield(
+    preset="shadow_first",
+    route_policies=[
+        {
+            "route": "/api/rag/search",
+            "options": {
+                "policy_pack": "government",
+                "output_firewall_defaults": {
+                    "retrieval_documents": kb_docs,
+                },
+            },
+        },
+    ],
+)
+```
+
+For agent tool-calling:
+
+```python
+tool_firewall = ToolPermissionFirewall(
+    allowed_tools=["search", "lookup_customer", "create_refund"],
+    require_human_approval_for=["create_refund"],
+)
+```
+
+## Operational Telemetry Summaries
+
+```python
+summary = summarize_operational_telemetry(events)
+print(summary["by_route"])
+print(summary["highest_severity"])
+```
+
 ### `AuditTrail`
 
 Produces signed events you can summarize into operations dashboards or audit pipelines.
@@ -177,12 +232,18 @@ Produces signed events you can summarize into operations dashboards or audit pip
 - `make version-packages` explains the automated versioning flow for Python
 - merges to `main` trigger release automation that prepares version/release PRs and publishes to PyPI after merge
 
+## Migration and Benchmarks
+
+- See [MIGRATING.md](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/MIGRATING.md) for compatibility notes and stable contract guidance
+- See [BENCHMARKS.md](/Users/vishnu/Documents/blackwall-llm-shield/blackwall-llm-shield-python/BENCHMARKS.md) for baseline latency numbers and regression coverage
+
 ## Rollout Notes
 
 - Start with `preset="shadow_first"` or `shadow_mode=True` and inspect `report["telemetry"]` plus `on_telemetry` events before enabling hard blocking.
 - Use `RetrievalSanitizer` and `ToolPermissionFirewall` in front of RAG, search, admin actions, and tool-calling flows.
 - Add regression prompts for instruction overrides, prompt leaks, token leaks, and Australian PII samples so upgrades stay safe.
 - Expect some latency increase from grounding checks, output review, and custom detectors; benchmark with your real prompt and response sizes before enforcing globally.
+- For agent workflows, keep approval-gated tools and route-specific presets separate from end-user chat routes so operators can see distinct risk patterns.
 
 ## New Modules
 

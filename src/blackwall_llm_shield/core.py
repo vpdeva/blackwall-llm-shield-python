@@ -367,6 +367,90 @@ def _create_telemetry_event(event_type: str, payload: Optional[Dict[str, Any]] =
     }
 
 
+def normalize_identity_metadata(metadata: Optional[Dict[str, Any]] = None, resolver: Optional[Any] = None) -> Dict[str, Any]:
+    payload = dict(metadata or {})
+    resolved = resolver(payload) if callable(resolver) else {}
+    source = {**payload, **(resolved or {})}
+    groups = source.get("groups") or source.get("sso_groups") or []
+    if isinstance(groups, str):
+        groups = [item.strip() for item in groups.split(",") if item.strip()]
+    if not isinstance(groups, list):
+        groups = []
+    return {
+        "user_id": source.get("user_id") or source.get("userId") or source.get("subject") or source.get("sub") or "anonymous",
+        "user_email": source.get("user_email") or source.get("userEmail") or source.get("email") or source.get("upn"),
+        "user_name": source.get("user_name") or source.get("userName") or source.get("display_name") or source.get("displayName") or source.get("name"),
+        "tenant_id": source.get("tenant_id") or source.get("tenantId") or source.get("org_id") or source.get("orgId") or "default",
+        "identity_provider": source.get("identity_provider") or source.get("identityProvider") or source.get("sso_provider") or source.get("ssoProvider") or source.get("idp"),
+        "auth_method": source.get("auth_method") or source.get("authMethod") or source.get("auth_type") or source.get("authType"),
+        "session_id": source.get("session_id") or source.get("sessionId"),
+        "groups": groups,
+    }
+
+
+def build_enterprise_telemetry_event(event: Optional[Dict[str, Any]] = None, resolver: Optional[Any] = None) -> Dict[str, Any]:
+    payload = dict(event or {})
+    metadata = dict(payload.get("metadata") or {})
+    actor = normalize_identity_metadata(metadata, resolver)
+    payload["actor"] = actor
+    payload["metadata"] = {
+        **metadata,
+        "user_id": metadata.get("user_id") or metadata.get("userId") or actor["user_id"],
+        "tenant_id": metadata.get("tenant_id") or metadata.get("tenantId") or actor["tenant_id"],
+        "identity_provider": metadata.get("identity_provider") or metadata.get("identityProvider") or actor["identity_provider"],
+        "session_id": metadata.get("session_id") or metadata.get("sessionId") or actor["session_id"],
+    }
+    return payload
+
+
+def build_powerbi_record(event: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = dict(event or {})
+    metadata = payload.get("metadata") or {}
+    actor = payload.get("actor") or normalize_identity_metadata(metadata)
+    report = payload.get("report") or {}
+    output_review = report.get("output_review") or {}
+    prompt_injection = report.get("prompt_injection") or {}
+    matches = prompt_injection.get("matches") or []
+    return {
+        "eventType": payload.get("type") or "unknown",
+        "createdAt": payload.get("created_at") or datetime.now(timezone.utc).isoformat(),
+        "route": metadata.get("route") or metadata.get("path") or "unknown",
+        "feature": metadata.get("feature") or metadata.get("capability") or metadata.get("route") or "unknown",
+        "model": metadata.get("model") or metadata.get("model_name") or "unknown",
+        "tenantId": actor.get("tenant_id") or "default",
+        "userId": actor.get("user_id") or "anonymous",
+        "userEmail": actor.get("user_email"),
+        "userName": actor.get("user_name"),
+        "identityProvider": actor.get("identity_provider"),
+        "authMethod": actor.get("auth_method"),
+        "sessionId": actor.get("session_id"),
+        "blocked": bool(payload.get("blocked")),
+        "shadowMode": bool(payload.get("shadow_mode")),
+        "severity": output_review.get("severity") or prompt_injection.get("level") or "low",
+        "topRule": matches[0].get("id") if matches else None,
+    }
+
+
+class PowerBIExporter:
+    def __init__(self, endpoint_url: Optional[str] = None, send_request: Optional[Any] = None):
+        self.endpoint_url = endpoint_url
+        self.send_request = send_request
+
+    def send(self, events: Any) -> List[Dict[str, Any]]:
+        items = events if isinstance(events, list) else [events]
+        records = [build_powerbi_record(item) for item in items if item]
+        if self.endpoint_url and callable(self.send_request):
+            self.send_request(self.endpoint_url, records)
+        elif self.endpoint_url:
+            body = json.dumps(records).encode("utf-8")
+            req = request.Request(self.endpoint_url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+            try:
+                request.urlopen(req, timeout=5)
+            except Exception:
+                pass
+        return records
+
+
 def _resolve_shield_preset(name: Optional[str]) -> Dict[str, Any]:
     if not name:
         return {}
@@ -484,6 +568,8 @@ def summarize_operational_telemetry(events: Optional[List[Dict[str, Any]]] = Non
         "by_type": {},
         "by_route": {},
         "by_feature": {},
+        "by_user": {},
+        "by_identity_provider": {},
         "by_tenant": {},
         "by_model": {},
         "by_policy_outcome": {
@@ -502,6 +588,8 @@ def summarize_operational_telemetry(events: Optional[List[Dict[str, Any]]] = Non
         route = str(metadata.get("route") or metadata.get("path") or "unknown")
         feature = str(metadata.get("feature") or metadata.get("capability") or route)
         tenant = str(metadata.get("tenant_id") or metadata.get("tenantId") or "unknown")
+        user = str(metadata.get("user_id") or metadata.get("userId") or ((event or {}).get("actor") or {}).get("user_id") or "unknown")
+        idp = str(metadata.get("identity_provider") or metadata.get("identityProvider") or ((event or {}).get("actor") or {}).get("identity_provider") or "unknown")
         model = str(metadata.get("model") or metadata.get("model_name") or "unknown")
         report = (event or {}).get("report") or {}
         if report.get("output_review"):
@@ -512,6 +600,8 @@ def summarize_operational_telemetry(events: Optional[List[Dict[str, Any]]] = Non
         summary["by_type"][event_type] = summary["by_type"].get(event_type, 0) + 1
         summary["by_route"][route] = summary["by_route"].get(route, 0) + 1
         summary["by_feature"][feature] = summary["by_feature"].get(feature, 0) + 1
+        summary["by_user"][user] = summary["by_user"].get(user, 0) + 1
+        summary["by_identity_provider"][idp] = summary["by_identity_provider"].get(idp, 0) + 1
         summary["by_tenant"][tenant] = summary["by_tenant"].get(tenant, 0) + 1
         summary["by_model"][model] = summary["by_model"].get(model, 0) + 1
         if event.get("blocked"):
@@ -1072,9 +1162,10 @@ class CoTScanner:
 
 
 class AgentIdentityRegistry:
-    def __init__(self):
+    def __init__(self, secret: str = "blackwall-agent-passport-secret"):
         self.identities: Dict[str, Dict[str, Any]] = {}
         self.ephemeral_tokens: Dict[str, Dict[str, Any]] = {}
+        self.secret = secret
 
     def register(self, agent_id: str, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         identity = {
@@ -1103,6 +1194,35 @@ class AgentIdentityRegistry:
             self.ephemeral_tokens.pop(token, None)
             return {"valid": False, "agent_id": record["agent_id"]}
         return {"valid": True, "agent_id": record["agent_id"]}
+
+    def issue_signed_passport(self, agent_id: str, security_score: Optional[int] = None, issuer: str = "blackwall-llm-shield-python", blackwall_protected: bool = True, environment: str = "production", profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        identity = self.get(agent_id) or self.register(agent_id, profile or {})
+        score = security_score if security_score is not None else max(0, 100 - (len([value for value in (identity.get("capabilities") or {}).values() if value]) * 10))
+        passport = {
+            "agent_id": agent_id,
+            "issued_at": datetime.now(timezone.utc).isoformat(),
+            "issuer": issuer,
+            "blackwall_protected": blackwall_protected,
+            "security_score": score,
+            "scopes": identity.get("scopes") or [],
+            "persona": identity.get("persona") or "default",
+            "environment": environment,
+        }
+        signature = hmac.new(self.secret.encode("utf-8"), json.dumps(passport, sort_keys=True).encode("utf-8"), hashlib.sha256).hexdigest()
+        return {**passport, "signature": signature}
+
+    def verify_signed_passport(self, passport: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        payload = dict(passport or {})
+        signature = payload.pop("signature", None)
+        if not signature:
+            return {"valid": False, "reason": "Passport signature is required"}
+        expected = hmac.new(self.secret.encode("utf-8"), json.dumps(payload, sort_keys=True).encode("utf-8"), hashlib.sha256).hexdigest()
+        return {
+            "valid": hmac.compare_digest(signature, expected),
+            "agent_id": payload.get("agent_id"),
+            "security_score": payload.get("security_score"),
+            "blackwall_protected": bool(payload.get("blackwall_protected")),
+        }
 
 
 class AgenticCapabilityGater:
@@ -1144,6 +1264,145 @@ class MCPSecurityProxy:
             "rotated_session_id": f"mcp_{rotated}" if rotated else None,
             "reason": "MCP scope mismatch detected" if missing_scopes else ("MCP action requires just-in-time approval" if requires_approval else None),
         }
+
+
+class ValueAtRiskCircuitBreaker:
+    def __init__(self, max_value_per_window: float = 5000, window_seconds: int = 3600, revocation_seconds: int = 1800, value_extractor: Optional[Any] = None):
+        self.max_value_per_window = max_value_per_window
+        self.window_seconds = window_seconds
+        self.revocation_seconds = revocation_seconds
+        self.value_extractor = value_extractor or (lambda args, context: context.get("action_value", args.get("amount", 0)))
+        self.entries: List[Dict[str, Any]] = []
+        self.revocations: Dict[str, float] = {}
+
+    def revoke_session(self, session_id: Optional[str], duration_seconds: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        if not session_id:
+            return None
+        expires_at = datetime.now(timezone.utc).timestamp() + (duration_seconds or self.revocation_seconds)
+        self.revocations[session_id] = expires_at
+        return {"session_id": session_id, "revoked_until": datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()}
+
+    def inspect(self, tool: Optional[str] = None, args: Optional[Dict[str, Any]] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        payload = context or {}
+        session_id = payload.get("session_id") or payload.get("sessionId")
+        now = datetime.now(timezone.utc).timestamp()
+        revoked_until = self.revocations.get(session_id) if session_id else None
+        if revoked_until and revoked_until > now:
+            return {
+                "allowed": False,
+                "triggered": True,
+                "requires_mfa": True,
+                "reason": "Session is revoked until MFA or human review completes",
+                "revoked_session": session_id,
+                "revoked_until": datetime.fromtimestamp(revoked_until, tz=timezone.utc).isoformat(),
+                "risk_window_value": None,
+            }
+        self.entries = [entry for entry in self.entries if (now - entry["at"]) <= self.window_seconds]
+        action_value = max(0.0, float(self.value_extractor(args or {}, payload) or 0))
+        key = session_id or payload.get("agent_id") or payload.get("user_id") or "default"
+        risk_window_value = sum(entry["value"] for entry in self.entries if entry["key"] == key) + action_value
+        triggered = risk_window_value > self.max_value_per_window
+        if triggered:
+            revocation = self.revoke_session(session_id)
+            return {
+                "allowed": False,
+                "triggered": True,
+                "requires_mfa": True,
+                "reason": f"Value-at-risk threshold exceeded for {tool or 'action'}",
+                "risk_window_value": risk_window_value,
+                "threshold": self.max_value_per_window,
+                "action_value": action_value,
+                "revoked_session": (revocation or {}).get("session_id"),
+                "revoked_until": (revocation or {}).get("revoked_until"),
+            }
+        self.entries.append({"key": key, "tool": tool or "unknown", "value": action_value, "at": now})
+        return {
+            "allowed": True,
+            "triggered": False,
+            "requires_mfa": False,
+            "risk_window_value": risk_window_value,
+            "threshold": self.max_value_per_window,
+            "action_value": action_value,
+        }
+
+
+class ShadowConsensusAuditor:
+    def __init__(self, review: Optional[Any] = None):
+        self.review = review or self._default_review
+
+    def _default_review(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        raw = json.dumps({
+            "tool": payload.get("tool"),
+            "args": payload.get("args"),
+            "session_context": payload.get("session_context") or "",
+        }).lower()
+        disagreement = bool(re.search(r"\b(ignore previous|bypass|override|secret|reveal)\b", raw, re.IGNORECASE))
+        return {
+            "agreed": not disagreement,
+            "disagreement": disagreement,
+            "reason": "Logic Conflict: shadow auditor found risky reasoning drift" if disagreement else None,
+        }
+
+    def inspect(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        result = self.review(payload or {}) or {}
+        return {
+            "agreed": result.get("agreed", True) is not False,
+            "disagreement": bool(result.get("disagreement")) or result.get("agreed") is False,
+            "reason": result.get("reason") or ("Logic Conflict detected by shadow auditor" if result.get("agreed") is False else None),
+            "auditor": result.get("auditor", "shadow"),
+        }
+
+
+class DigitalTwinOrchestrator:
+    def __init__(self, tool_schemas: Optional[List[Dict[str, Any]]] = None):
+        self.tool_schemas = tool_schemas or []
+        self.invocations: List[Dict[str, Any]] = []
+
+    def generate(self) -> Dict[str, Any]:
+        handlers: Dict[str, Any] = {}
+        for schema in self.tool_schemas:
+            if not schema or not schema.get("name"):
+                continue
+
+            def _handler(args: Optional[Dict[str, Any]] = None, schema: Dict[str, Any] = schema) -> Dict[str, Any]:
+                response = schema.get("mock_response") or schema.get("sample_response") or {"ok": True, "tool": schema["name"], "args": args or {}}
+                self.invocations.append({"tool": schema["name"], "args": args or {}, "response": response, "at": datetime.now(timezone.utc).isoformat()})
+                return response
+
+            handlers[schema["name"]] = _handler
+
+        def _simulate_call(tool: str, args: Optional[Dict[str, Any]] = None) -> Any:
+            if tool not in handlers:
+                raise ValueError(f"No digital twin registered for {tool}")
+            return handlers[tool](args or {})
+
+        return {"handlers": handlers, "simulate_call": _simulate_call, "invocations": self.invocations}
+
+
+def suggest_policy_override(approval: Optional[bool] = None, route: Optional[str] = None, guard_result: Optional[Dict[str, Any]] = None, tool_decision: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    if approval is not True:
+        return None
+    if guard_result and ((guard_result.get("report") or {}).get("prompt_injection")):
+        report = guard_result["report"]
+        rules = [item.get("id") for item in ((report.get("prompt_injection") or {}).get("matches") or []) if item.get("id")]
+        return {
+            "route": route or ((report.get("metadata") or {}).get("route") or (report.get("metadata") or {}).get("path") or "*"),
+            "options": {
+                "shadow_mode": True,
+                "suppress_prompt_rules": list(dict.fromkeys(rules)),
+            },
+            "rationale": "Suggested from approved false positive",
+        }
+    if tool_decision and tool_decision.get("approval_request"):
+        request_payload = tool_decision["approval_request"]
+        return {
+            "route": route or ((request_payload.get("context") or {}).get("route") or "*"),
+            "options": {
+                "require_human_approval_for": [request_payload.get("tool")],
+            },
+            "rationale": "Suggested from approved high-impact tool action",
+        }
+    return None
 
 
 class ImageMetadataScanner:
@@ -1268,6 +1527,8 @@ class BlackwallShield:
     output_firewall_defaults: Dict[str, Any] = field(default_factory=dict)
     on_alert: Optional[Any] = None
     on_telemetry: Optional[Any] = None
+    telemetry_exporters: List[Any] = field(default_factory=list)
+    identity_resolver: Optional[Any] = None
     webhook_url: Optional[str] = None
 
     def inspect_text(self, text: Any) -> Dict[str, Any]:
@@ -1297,8 +1558,12 @@ class BlackwallShield:
                 pass
 
     def _emit_telemetry(self, event: Dict[str, Any]) -> None:
+        enriched = build_enterprise_telemetry_event(event, self.identity_resolver)
         if callable(self.on_telemetry):
-            self.on_telemetry(event)
+            self.on_telemetry(enriched)
+        for exporter in self.telemetry_exporters or []:
+            if hasattr(exporter, "send") and callable(exporter.send):
+                exporter.send([enriched])
 
     def guard_model_request(self, messages: Any, metadata: Optional[Dict[str, Any]] = None, allow_system_messages: Optional[bool] = None, compare_policy_packs: Optional[List[str]] = None) -> Dict[str, Any]:
         effective_options = _resolve_effective_shield_options(self.__dict__, metadata)
@@ -1604,12 +1869,15 @@ class OutputFirewall:
 
 
 class ToolPermissionFirewall:
-    def __init__(self, allowed_tools: Optional[List[str]] = None, blocked_tools: Optional[List[str]] = None, validators: Optional[Dict[str, Any]] = None, require_human_approval_for: Optional[List[str]] = None, capability_gater: Optional[AgenticCapabilityGater] = None, on_approval_request: Optional[Any] = None, approval_webhook_url: Optional[str] = None):
+    def __init__(self, allowed_tools: Optional[List[str]] = None, blocked_tools: Optional[List[str]] = None, validators: Optional[Dict[str, Any]] = None, require_human_approval_for: Optional[List[str]] = None, capability_gater: Optional[AgenticCapabilityGater] = None, value_at_risk_circuit_breaker: Optional[ValueAtRiskCircuitBreaker] = None, consensus_auditor: Optional[ShadowConsensusAuditor] = None, consensus_required_for: Optional[List[str]] = None, on_approval_request: Optional[Any] = None, approval_webhook_url: Optional[str] = None):
         self.allowed_tools = allowed_tools or []
         self.blocked_tools = blocked_tools or []
         self.validators = validators or {}
         self.require_human_approval_for = require_human_approval_for or []
         self.capability_gater = capability_gater
+        self.value_at_risk_circuit_breaker = value_at_risk_circuit_breaker
+        self.consensus_auditor = consensus_auditor
+        self.consensus_required_for = consensus_required_for or []
         self.on_approval_request = on_approval_request
         self.approval_webhook_url = approval_webhook_url
 
@@ -1629,6 +1897,33 @@ class ToolPermissionFirewall:
             gate = self.capability_gater.evaluate((context or {})["agent_id"], (context or {}).get("capabilities") or {})
             if not gate["allowed"]:
                 return {"allowed": False, "reason": gate["reason"], "requires_approval": False, "agent_gate": gate}
+        if self.value_at_risk_circuit_breaker:
+            breaker = self.value_at_risk_circuit_breaker.inspect(tool=tool, args=args or {}, context=context or {})
+            if not breaker["allowed"]:
+                return {
+                    "allowed": False,
+                    "reason": breaker["reason"],
+                    "requires_approval": True,
+                    "requires_mfa": bool(breaker.get("requires_mfa")),
+                    "circuit_breaker": breaker,
+                    "approval_request": {"tool": tool, "args": args or {}, "context": context or {}, "breaker": breaker},
+                }
+        if self.consensus_auditor and ((context or {}).get("high_impact") or tool in self.consensus_required_for):
+            consensus = self.consensus_auditor.inspect({
+                "tool": tool,
+                "args": args or {},
+                "context": context or {},
+                "session_context": (context or {}).get("session_context") or (context or {}).get("session_buffer"),
+            })
+            if consensus["disagreement"]:
+                return {
+                    "allowed": False,
+                    "reason": consensus["reason"] or "Logic Conflict detected by shadow auditor",
+                    "requires_approval": True,
+                    "logic_conflict": True,
+                    "consensus": consensus,
+                    "approval_request": {"tool": tool, "args": args or {}, "context": context or {}, "consensus": consensus},
+                }
         requires_approval = tool in self.require_human_approval_for
         result = {"allowed": not requires_approval, "reason": f"Tool {tool} requires human approval" if requires_approval else None, "requires_approval": requires_approval, "approval_request": {"tool": tool, "args": args or {}, "context": context or {}} if requires_approval else None}
         if requires_approval:
@@ -1700,13 +1995,16 @@ class RetrievalSanitizer:
 
 
 class AuditTrail:
-    def __init__(self, secret: str = "blackwall-default-secret"):
+    def __init__(self, secret: str = "blackwall-default-secret", identity_resolver: Optional[Any] = None):
         self.secret = secret
+        self.identity_resolver = identity_resolver
         self.events: List[Dict[str, Any]] = []
 
     def record(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        actor = (event or {}).get("actor") or normalize_identity_metadata((event or {}).get("metadata") or event, self.identity_resolver)
         payload = {
             **(event or {}),
+            "actor": actor,
             "compliance_map": (event or {}).get("compliance_map") or _map_compliance(
                 [*((event or {}).get("rule_ids") or []), "retrieval_poisoning" if (event or {}).get("type") == "retrieval_poisoning_detected" else ""]
             ),

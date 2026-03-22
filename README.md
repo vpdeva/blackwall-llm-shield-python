@@ -77,6 +77,8 @@ The current recommendation for enterprise teams is a controlled pilot first: sta
 
 Use `summarize_operational_telemetry()` with emitted telemetry events when you want route-level, tenant-level, and model-level summaries, blocked-event counts, and rollout visibility for operators.
 
+Enterprise deployments can also enrich emitted events with SSO/user context and forward flattened records to Power BI or other downstream reporting systems.
+
 ### Output grounding and tone review
 
 `OutputFirewall` can compare a response to retrieval documents and flag unsupported claims or unprofessional tone before the answer leaves your service.
@@ -104,6 +106,8 @@ Protects the response path by checking outputs for secret leaks, unsafe code pat
 ### `ToolPermissionFirewall`
 
 Protects tool execution with allowlists, blocklists, validators, and approval-required workflows.
+
+It can also integrate with `ValueAtRiskCircuitBreaker` for high-value actions and `ShadowConsensusAuditor` for secondary logic review before sensitive tools execute.
 
 ### `RetrievalSanitizer`
 
@@ -168,6 +172,48 @@ def create_model_shield(shield):
             metadata=metadata,
         )
     return run
+```
+
+## Add SSO-aware Telemetry and Power BI Export
+
+```python
+from blackwall_llm_shield import BlackwallShield, PowerBIExporter
+
+shield = BlackwallShield(
+    identity_resolver=lambda metadata: {
+        "user_id": ((metadata.get("sso") or {}).get("subject")),
+        "user_email": ((metadata.get("sso") or {}).get("email")),
+        "user_name": ((metadata.get("sso") or {}).get("displayName")),
+        "identity_provider": ((metadata.get("sso") or {}).get("provider")),
+        "groups": ((metadata.get("sso") or {}).get("groups") or []),
+    },
+    telemetry_exporters=[
+        PowerBIExporter(endpoint_url="https://example.powerbi.local/push"),
+    ],
+)
+```
+
+## Protect High-value Actions with a VaR Breaker and Consensus Auditor
+
+```python
+firewall = ToolPermissionFirewall(
+    allowed_tools=["issue_refund"],
+    value_at_risk_circuit_breaker=ValueAtRiskCircuitBreaker(max_value_per_window=5000),
+    consensus_auditor=ShadowConsensusAuditor(),
+    consensus_required_for=["issue_refund"],
+)
+```
+
+## Generate a Digital Twin for Sandbox Testing
+
+```python
+twin = DigitalTwinOrchestrator(
+    tool_schemas=[
+        {"name": "lookup_order", "mock_response": {"order_id": "ord_1", "status": "mocked"}},
+    ]
+).generate()
+
+twin["simulate_call"]("lookup_order", {"order_id": "ord_1"})
 ```
 
 ## Strict JSON Workflow Pattern
@@ -288,6 +334,8 @@ shield = BlackwallShield(
 summary = summarize_operational_telemetry(events)
 print(summary["by_route"])
 print(summary["by_feature"])
+print(summary["by_user"])
+print(summary["by_identity_provider"])
 print(summary["noisiest_routes"])
 print(summary["weekly_block_estimate"])
 print(summary["by_tenant"])
@@ -298,6 +346,14 @@ print(summary["highest_severity"])
 ### `AuditTrail`
 
 Produces signed events you can summarize into operations dashboards or audit pipelines.
+
+## Advanced Agent Controls
+
+- `ValueAtRiskCircuitBreaker` for financial or high-value operational actions
+- `ShadowConsensusAuditor` for second-model or secondary-review logic conflict checks
+- `DigitalTwinOrchestrator` for mock tool environments and sandbox simulations
+- `suggest_policy_override()` for narrow false-positive tuning suggestions after HITL approvals
+- `AgentIdentityRegistry.issue_signed_passport()` for signed agent identity exchange
 
 ## Included Examples
 
@@ -339,6 +395,8 @@ For Gemini-heavy apps, the bundled adapter now preserves system instructions plu
 - A controlled pilot is a good fit today when you want shadow-mode prompt and output protection without forcing hard blocking on every route immediately.
 - If you prefer not to depend on Blackwall directly everywhere, wrap it behind your own internal model-security abstraction and expose only the contract your app teams need.
 - For broader approval, focus rollout reviews on false-positive rates, noisiest routes, and latency budgets alongside jailbreak coverage.
+- For executive or staff-facing workflows, always attach authenticated identity metadata so telemetry can answer which user triggered which risky request or output event.
+- For high-impact agentic workflows, combine tool approval, VaR limits, digital-twin tests, and signed agent passports instead of relying on a single detector.
 
 ## Rollout Notes
 

@@ -3,12 +3,12 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "blackwall-llm-shield-python"
+name = "vpdeva-blackwall-llm-shield-python"
 version = "0.1.0"
 description = "Open-source Python enterprise LLM protection toolkit for Python services"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 authors = [
   { name = "Vish", email = "hello@vish.au" }
 ]
@@ -16,7 +16,6 @@ keywords = ["llm", "security", "prompt-injection", "pii", "enterprise"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent"
 ]
 

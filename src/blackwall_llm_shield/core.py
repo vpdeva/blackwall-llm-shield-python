@@ -190,6 +190,30 @@ def _map_compliance(ids: List[str]) -> List[str]:
     return mapped
 
 
+def _count_findings_by_type(findings: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for finding in findings or []:
+        key = str(finding.get("type") or finding.get("id") or finding.get("category") or "unknown")
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _summarize_sensitive_findings(findings: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for finding in findings or []:
+        key = str(finding.get("type") or "unknown")
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _create_telemetry_event(event_type: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return {
+        "type": event_type,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        **(payload or {}),
+    }
+
+
 class LightweightIntentScorer:
     def __init__(self, weights: Optional[Dict[str, int]] = None):
         self.lexicon = {
@@ -861,6 +885,7 @@ class BlackwallShield:
     token_budget_firewall: Optional[Any] = None
     system_prompt: Optional[str] = None
     on_alert: Optional[Any] = None
+    on_telemetry: Optional[Any] = None
     webhook_url: Optional[str] = None
 
     def inspect_text(self, text: Any) -> Dict[str, Any]:
@@ -885,6 +910,10 @@ class BlackwallShield:
                 request.urlopen(req, timeout=5)
             except Exception:
                 pass
+
+    def _emit_telemetry(self, event: Dict[str, Any]) -> None:
+        if callable(self.on_telemetry):
+            self.on_telemetry(event)
 
     def guard_model_request(self, messages: Any, metadata: Optional[Dict[str, Any]] = None, allow_system_messages: Optional[bool] = None, compare_policy_packs: Optional[List[str]] = None) -> Dict[str, Any]:
         effective_allow_system = self.allow_system_messages if allow_system_messages is None else allow_system_messages
@@ -936,7 +965,23 @@ class BlackwallShield:
             "policy_pack": primary_policy["name"] if primary_policy else None,
             "policy_comparisons": policy_comparisons,
             "token_budget": budget_result,
+            "telemetry": {
+                "event_type": "llm_request_reviewed",
+                "prompt_injection_rule_hits": _count_findings_by_type(injection["matches"]),
+                "masked_entity_counts": _summarize_sensitive_findings(masked["findings"]),
+                "prompt_token_estimate": budget_result["estimated_tokens"],
+                "compliance_map": _map_compliance(
+                    [item["id"] for item in injection["matches"]] + ([] if budget_result["allowed"] else ["token_budget_exceeded"])
+                ),
+            },
         }
+
+        self._emit_telemetry(_create_telemetry_event("llm_request_reviewed", {
+            "metadata": metadata or {},
+            "blocked": should_block or not budget_result["allowed"],
+            "shadow_mode": self.shadow_mode,
+            "report": report,
+        }))
 
         if should_notify or would_block:
             self._notify({
@@ -956,6 +1001,85 @@ class BlackwallShield:
             "vault": masked["vault"],
         }
 
+    def review_model_response(self, output: Any, metadata: Optional[Dict[str, Any]] = None, output_firewall: Optional["OutputFirewall"] = None, firewall_options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        primary_policy = _resolve_policy_pack(self.policy_pack)
+        options = firewall_options or {}
+        firewall = output_firewall or OutputFirewall(
+            risk_threshold=(primary_policy or {}).get("output_risk_threshold", "high"),
+            system_prompt=self.system_prompt,
+            **options,
+        )
+        review = firewall.inspect(output, system_prompt=self.system_prompt, **options)
+        report = {
+            "package": "blackwall-llm-shield-python",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": metadata or {},
+            "output_review": {
+                **review,
+                "telemetry": {
+                    "event_type": "llm_output_reviewed",
+                    "finding_counts": _count_findings_by_type(review["findings"]),
+                    "pii_entity_counts": _summarize_sensitive_findings(review["pii_findings"]),
+                    "compliance_map": _map_compliance([item["id"] for item in review["findings"]]),
+                },
+            },
+        }
+        self._emit_telemetry(_create_telemetry_event("llm_output_reviewed", {
+            "metadata": metadata or {},
+            "blocked": not review["allowed"],
+            "report": report,
+        }))
+        if not review["allowed"] or _compare_risk(review["severity"], "high"):
+            self._notify({
+                "type": "llm_output_blocked" if not review["allowed"] else "llm_output_risky",
+                "severity": review["severity"],
+                "reason": "Model output failed Blackwall review" if not review["allowed"] else "Model output triggered Blackwall findings",
+                "report": report,
+            })
+        return {**review, "report": report}
+
+    def protect_model_call(self, messages: Any, call_model: Any, metadata: Optional[Dict[str, Any]] = None, allow_system_messages: Optional[bool] = None, compare_policy_packs: Optional[List[str]] = None, map_messages: Optional[Any] = None, map_output: Optional[Any] = None, output_firewall: Optional["OutputFirewall"] = None, firewall_options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if not callable(call_model):
+            raise TypeError("call_model must be callable")
+        request_result = self.guard_model_request(
+            messages=messages,
+            metadata=metadata,
+            allow_system_messages=allow_system_messages,
+            compare_policy_packs=compare_policy_packs,
+        )
+        if not request_result["allowed"]:
+            return {
+                "allowed": False,
+                "blocked": True,
+                "stage": "request",
+                "reason": request_result["reason"],
+                "request": request_result,
+                "response": None,
+                "review": None,
+            }
+        guarded_messages = map_messages(request_result["messages"], request_result) if callable(map_messages) else request_result["messages"]
+        response = call_model({
+            "messages": guarded_messages,
+            "metadata": metadata or {},
+            "guard": request_result,
+        })
+        output = map_output(response, request_result) if callable(map_output) else response
+        review = self.review_model_response(
+            output,
+            metadata=metadata,
+            output_firewall=output_firewall,
+            firewall_options=firewall_options,
+        )
+        return {
+            "allowed": review["allowed"],
+            "blocked": not review["allowed"],
+            "stage": "complete" if review["allowed"] else "output",
+            "reason": None if review["allowed"] else "Model output failed Blackwall review",
+            "request": request_result,
+            "response": response,
+            "review": review,
+        }
+
 
 class OutputFirewall:
     def __init__(self, risk_threshold: str = "high", required_schema: Optional[Dict[str, str]] = None, retrieval_documents: Optional[List[Dict[str, Any]]] = None, grounding_overlap_threshold: float = 0.18, enforce_professional_tone: bool = False, cot_scanner: Optional[CoTScanner] = None, system_prompt: Optional[str] = None):
@@ -967,14 +1091,14 @@ class OutputFirewall:
         self.cot_scanner = cot_scanner
         self.system_prompt = system_prompt
 
-    def inspect(self, output: Any) -> Dict[str, Any]:
+    def inspect(self, output: Any, retrieval_documents: Optional[List[Dict[str, Any]]] = None, system_prompt: Optional[str] = None) -> Dict[str, Any]:
         text = output if isinstance(output, str) else json.dumps(output)
         findings = [rule for rule in OUTPUT_LEAKAGE_RULES if rule["regex"].search(text)]
         pii = mask_text(text)
         schema_valid = validate_required_schema(output, self.required_schema)
-        grounding = validate_grounding(text, self.retrieval_documents, grounding_overlap_threshold=self.grounding_overlap_threshold)
+        grounding = validate_grounding(text, retrieval_documents if retrieval_documents is not None else self.retrieval_documents, grounding_overlap_threshold=self.grounding_overlap_threshold)
         tone = inspect_tone(text)
-        cot = (self.cot_scanner or CoTScanner(system_prompt=self.system_prompt)).scan(output)
+        cot = (self.cot_scanner or CoTScanner(system_prompt=system_prompt or self.system_prompt)).scan(output)
 
         severity = "low"
         if any(item["severity"] == "critical" for item in findings):
@@ -1000,6 +1124,7 @@ class OutputFirewall:
             "grounding": grounding,
             "tone": tone,
             "cot": cot,
+            "compliance_map": _map_compliance([item["id"] for item in findings]),
         }
 
 

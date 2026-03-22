@@ -11,6 +11,7 @@ Python security toolkit for AI applications and LLM-enabled services. Blackwall 
 - Blocks requests when risk exceeds configured policy
 - Supports shadow mode and side-by-side policy-pack evaluation
 - Sends alerts through callbacks or webhooks
+- Emits structured telemetry for prompt risk, masking volume, and output review outcomes
 - Inspects outputs for leakage, unsafe code, grounding drift, and tone violations
 - Ships drop-in FastAPI/Flask middleware and LangChain/LlamaIndex callback helpers
 - Enforces tool permissions and approval gates
@@ -21,8 +22,8 @@ Python security toolkit for AI applications and LLM-enabled services. Blackwall 
 ## Install
 
 ```bash
-pip install blackwall-llm-shield-python
-pip install blackwall-llm-shield-python[integrations,semantic]
+pip install vpdeva-blackwall-llm-shield-python
+pip install "vpdeva-blackwall-llm-shield-python[integrations,semantic]"
 ```
 
 ## Fast Start
@@ -79,6 +80,8 @@ Run `python -m blackwall_llm_shield.ui` for a local dashboard, or build from [`D
 
 Front door for message normalization, masking, prompt-injection detection, alerting, and policy decisions.
 
+It also exposes `protect_model_call()` and `review_model_response()` so you can enforce request checks before provider calls and inspect outputs before they reach users or agents.
+
 ### `OutputFirewall`
 
 Protects the response path by checking outputs for secret leaks, unsafe code patterns, and schema issues.
@@ -90,6 +93,35 @@ Protects tool execution with allowlists, blocklists, validators, and approval-re
 ### `RetrievalSanitizer`
 
 Helps keep hostile or manipulative text in retrieved documents from becoming model instructions.
+
+Pair it with `protect_model_call()` by passing sanitized documents into `firewall_options={"retrieval_documents": docs}` and gate any tool or admin action with `ToolPermissionFirewall`.
+
+## Example Workflow
+
+```python
+from blackwall_llm_shield import BlackwallShield
+
+telemetry = []
+shield = BlackwallShield(
+    shadow_mode=True,
+    on_telemetry=lambda event: telemetry.append(event),
+)
+
+result = shield.protect_model_call(
+    [{"role": "user", "content": "Summarize this shipment exception."}],
+    lambda payload: {"answer": f"Safe summary for {payload['messages'][0]['content']}"},
+    metadata={"route": "/chat", "tenant_id": "au-commerce", "user_id": "ops-7"},
+    map_output=lambda response, _: response["answer"],
+    firewall_options={
+        "retrieval_documents": [
+            {"id": "kb-1", "content": "Shipment exceptions should include the parcel ID, lane, and next action."}
+        ]
+    },
+)
+
+print(result["stage"], result["allowed"])
+print(telemetry[-1]["type"])
+```
 
 ### `AuditTrail`
 

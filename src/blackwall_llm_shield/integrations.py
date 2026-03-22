@@ -63,7 +63,7 @@ class BlackwallLangChainCallback(BaseCallbackHandler):
         if generations and generations[0]:
             first = generations[0][0]
             text = getattr(first, "text", None) or getattr(getattr(first, "message", None), "content", "") or ""
-        review = self.output_firewall.inspect(text)
+        review = self.shield.review_model_response(text, output_firewall=self.output_firewall) if hasattr(self.shield, "review_model_response") else self.output_firewall.inspect(text)
         self.last_output_review = review
         if not review["allowed"]:
             raise ValueError("Blackwall blocked model output")
@@ -95,7 +95,7 @@ class BlackwallLlamaIndexCallback:
             return None
         payload = getattr(event, "payload", None) or {}
         text = payload.get("response") or payload.get("output") or ""
-        review = self.output_firewall.inspect(text)
+        review = self.shield.review_model_response(text, output_firewall=self.output_firewall) if hasattr(self.shield, "review_model_response") else self.output_firewall.inspect(text)
         self.last_output_review = review
         if not review["allowed"]:
             raise ValueError("Blackwall blocked model output")

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.0
+
+- Added threat-intel sync hooks, anomaly detection, telemetry replay, signed inspection attestation, and a streaming output firewall
+- Hardened the Python sidecar with API-key auth and added a `/guard/stream` endpoint for stream-aware output checks
+- Added policy-config validation flow through the scorecard CLI and kept the new runtime slice aligned with JS
+
+## 0.5.1
+
+- Added persisted corpus hardening for adversarial mutations and strengthened the lightweight edge-oriented masking path
+- Added explicit coverage paths for training data poisoning, improper output reliance, excessive agency, and overreliance in OWASP reporting
+- Fixed tracker lifecycle so shared conversation history stays attached to the shield instance instead of falling back to per-request creation
+
+## 0.5.0
+
+- Added automatic multi-turn threat tracking by default, realistic OWASP coverage reporting, and automatic provenance stamping on guarded request/output paths
+- Added richer plugin hooks for output scanning, retrieval inspection, and telemetry enrichment plus an end-to-end `protect_zero_trust_model_call()` helper
+- Expanded adversarial mutation strategies, improved unicode de-obfuscation, and widened regression coverage for the new governance paths
+
+## 0.4.0
+
+- Added a reversible `unvault()` API, `ConversationThreatTracker`, plugin registration via `shield.use(plugin)`, and a lightweight edge-friendly shield entry point
+- Added OWASP LLM coverage reporting, adversarial mutation helpers, prompt provenance tracking, and stronger grounding output metadata
+- Expanded regression coverage for the new platform primitives and kept the Python public surface aligned with JS
+
 ## 0.2.1
 
 - Added `CrossModelConsensusWrapper` for out-of-the-box cross-model safety verification
@@ -7,6 +31,12 @@
 - Added schema-derived digital twins from `ToolPermissionFirewall`
 - Added `PolicyLearningLoop` for approval-history-based policy suggestions
 - Added JWT-style passport tokens in `AgentIdentityRegistry`
+
+## 0.3.0
+
+- Added richer signed agent passports with capability manifests, lineage, trust scores, and PQC-ready crypto profile metadata
+- Added `QuorumApprovalEngine`, `SovereignRoutingEngine`, simulation-mode digital twins with differential privacy noise, and explainable transparency reports
+- Wired quorum approvals into tool gating and added trust-score degradation when agents repeatedly fall out of consensus
 
 ## 0.2.4
 

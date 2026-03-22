@@ -143,7 +143,7 @@ Recommended presets:
 
 ### Global Governance Pack
 
-The 0.2.2 line also adds globally applicable enterprise controls that are useful across regulated industries, not just one country or sector:
+The 0.5.0 line also adds globally applicable enterprise controls that are useful across regulated industries, not just one country or sector:
 
 - `DataClassificationGate` to classify traffic as `public`, `internal`, `confidential`, or `restricted`
 - `ProviderRoutingPolicy` to keep sensitive classes on approved providers
@@ -151,6 +151,8 @@ The 0.2.2 line also adds globally applicable enterprise controls that are useful
 - `build_compliance_event_bundle()` and `sanitize_audit_event()` for audit-safe event export
 - `RetrievalTrustScorer` and `OutboundCommunicationGuard` for retrieval trust and outbound checks
 - `detect_operational_drift()` for release-over-release noise monitoring
+- `ConversationThreatTracker`, `shield.use(plugin)`, `generate_coverage_report()`, and `unvault()` for multi-turn defense, ecosystem extensions, OWASP reporting, and reversible PII workflows
+- `AdversarialMutationEngine`, `PromptProvenanceGraph`, and `LiteBlackwallShield` for corpus hardening, cross-hop tracing, and lightweight deployments
 
 ## Example Workflow
 
@@ -390,9 +392,12 @@ Produces signed events you can summarize into operations dashboards or audit pip
 - `ValueAtRiskCircuitBreaker` for financial or high-value operational actions
 - `ShadowConsensusAuditor` for second-model or secondary-review logic conflict checks
 - `CrossModelConsensusWrapper` for automatic cross-model verification of high-impact actions
+- `QuorumApprovalEngine` for committee-based approvals and trust-score-aware multi-agent decisions
 - `DigitalTwinOrchestrator` for mock tool environments and sandbox simulations
+- `SovereignRoutingEngine` for local-vs-global provider routing based on data classification
 - `PolicyLearningLoop` plus `suggest_policy_override()` for narrow false-positive tuning suggestions after HITL approvals
-- `AgentIdentityRegistry.issue_signed_passport()` and `issue_passport_token()` for signed agent identity exchange
+- `build_transparency_report()` for explainable operator and compliance artifacts
+- `AgentIdentityRegistry.issue_signed_passport()` and `issue_passport_token()` for signed agent identity exchange with capability manifests and lineage
 
 ## Included Examples
 

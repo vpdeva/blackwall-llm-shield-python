@@ -6,7 +6,7 @@ import json
 import os
 from typing import Any, Dict
 
-from .core import BlackwallShield, OutputFirewall
+from .core import BlackwallShield, OutputFirewall, StreamingOutputFirewall
 
 
 def build_sidecar_components() -> Dict[str, Any]:
@@ -17,11 +17,19 @@ def build_sidecar_components() -> Dict[str, Any]:
         shadow_mode=os.getenv("BLACKWALL_SHADOW_MODE", "false").lower() == "true",
     )
     firewall = OutputFirewall(risk_threshold=os.getenv("BLACKWALL_OUTPUT_THRESHOLD", "high"))
-    return {"shield": shield, "firewall": firewall}
+    stream_firewall = StreamingOutputFirewall(output_firewall=firewall)
+    return {"shield": shield, "firewall": firewall, "stream_firewall": stream_firewall}
 
 
 class _SidecarHandler(BaseHTTPRequestHandler):
     components = build_sidecar_components()
+
+    def _authorized(self) -> bool:
+        expected = os.getenv("BLACKWALL_API_KEY")
+        if not expected:
+            return True
+        provided = self.headers.get("X-Blackwall-Api-Key")
+        return bool(provided and provided == expected)
 
     def _read_json(self) -> Dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -46,6 +54,9 @@ class _SidecarHandler(BaseHTTPRequestHandler):
         self._write_json({"error": "Not found"}, status=404)
 
     def do_POST(self) -> None:  # pragma: no cover - exercised manually
+        if not self._authorized():
+            self._write_json({"error": "Unauthorized"}, status=401)
+            return
         payload = self._read_json()
         if self.path == "/guard/request":
             result = self.components["shield"].guard_model_request(
@@ -58,6 +69,15 @@ class _SidecarHandler(BaseHTTPRequestHandler):
         if self.path == "/guard/output":
             result = self.components["firewall"].inspect(payload.get("output"))
             self._write_json(result, status=200 if result.get("allowed") else 422)
+            return
+        if self.path == "/guard/stream":
+            chunks = payload.get("chunks") or []
+            latest = {"allowed": True, "blocked": False, "review": None}
+            for chunk in chunks:
+                latest = self.components["stream_firewall"].ingest(chunk)
+                if latest.get("blocked"):
+                    break
+            self._write_json(latest, status=200 if latest.get("allowed") else 422)
             return
         self._write_json({"error": "Not found"}, status=404)
 

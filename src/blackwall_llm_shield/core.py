@@ -54,6 +54,82 @@ FIELD_HINTS = [
     "tfn",
 ]
 
+ENTERPRISE_ACTION_ORDER = {
+    "allow": 0,
+    "mask": 1,
+    "warn_and_confirm": 2,
+    "route_for_review": 3,
+    "block": 4,
+}
+ENTERPRISE_DETECTOR_RULES = [
+    {
+        "type": "financial_value",
+        "placeholder": "FINANCIAL_VALUE",
+        "regexes": [
+            re.compile(r"(?:aud|usd|eur|gbp|\$)\s?\d[\d,]*(?:\.\d+)?\s?(?:k|m|b|million|billion|thousand)?\s+(?:ebitda|revenue|arr|forecast|guidance|margin|opex|capex|budget|run\s?rate)\b", re.IGNORECASE),
+            re.compile(r"\b(?:aud|usd|eur|gbp|\$)\s?\d[\d,]*(?:\.\d+)?\s?(?:k|m|b|million|billion|thousand)?\s+(?:ebitda|revenue|arr|forecast|guidance|margin|opex|capex|budget|run\s?rate)\b", re.IGNORECASE),
+            re.compile(r"\b(?:ebitda|revenue|arr|margin|opex|capex|budget|run\s?rate)\s+(?:of\s+)?(?:aud|usd|eur|gbp|\$)\s?\d[\d,]*(?:\.\d+)?\s?(?:k|m|b|million|billion|thousand)?\b", re.IGNORECASE),
+        ],
+    },
+    {
+        "type": "employee_identifier",
+        "placeholder": "EMPLOYEE_ID",
+        "regexes": [
+            re.compile(r"\b(?:employee|staff|worker|personnel)\s*(?:id|identifier|number|no\.?)[:#\s-]*[A-Z]{0,3}\d{3,10}\b", re.IGNORECASE),
+        ],
+    },
+    {
+        "type": "customer_account_number",
+        "placeholder": "ACCOUNT_NUMBER",
+        "regexes": [
+            re.compile(r"\b(?:customer|client|account)\s*(?:id|identifier|number|no\.?)[:#\s-]*[A-Z]{0,4}\d{4,12}\b", re.IGNORECASE),
+        ],
+    },
+    {
+        "type": "payroll_salary",
+        "placeholder": "PAYROLL_DATA",
+        "regexes": [
+            re.compile(r"\b(?:payroll|salary|salaries|compensation|bonus|wage|wages|base pay|remuneration)\b(?:.{0,40}\b(?:aud|usd|eur|gbp|\$|\d{2,3}(?:,\d{3})*))?", re.IGNORECASE),
+        ],
+    },
+    {
+        "type": "financial_forecast",
+        "placeholder": "FINANCIAL_FORECAST",
+        "regexes": [
+            re.compile(r"\b(?:forecast|guidance|projection|projected|outlook|budget|plan)\b.{0,40}\b(?:revenue|ebitda|earnings|arr|margin|opex|capex)\b", re.IGNORECASE),
+            re.compile(r"\b(?:revenue|ebitda|earnings|arr|margin|opex|capex)\b.{0,40}\b(?:forecast|guidance|projection|projected|outlook|budget|plan)\b", re.IGNORECASE),
+        ],
+    },
+    {
+        "type": "board_material",
+        "placeholder": "BOARD_MATERIAL",
+        "regexes": [
+            re.compile(r"\b(?:board deck|board paper|board materials?|board meeting|board minutes?|directors?' pack|directors?' briefing)\b", re.IGNORECASE),
+        ],
+    },
+    {
+        "type": "mna_material",
+        "placeholder": "MNA_MATERIAL",
+        "regexes": [
+            re.compile(r"\b(?:m&a|merger|acquisition|acquire|divestiture|due diligence|term sheet|loi|letter of intent|target company)\b", re.IGNORECASE),
+        ],
+    },
+    {
+        "type": "legal_confidential_material",
+        "placeholder": "LEGAL_CONFIDENTIAL",
+        "regexes": [
+            re.compile(r"\b(?:privileged|attorney[- ]client|legal advice|litigation|lawsuit|claim|settlement|arbitration|subpoena|case file)\b", re.IGNORECASE),
+        ],
+    },
+    {
+        "type": "project_codename",
+        "placeholder": "PROJECT_CODENAME",
+        "regexes": [
+            re.compile(r"\b(?:project|codename|code name|initiative|program)\s+[A-Z][A-Za-z0-9_-]{2,}\b"),
+        ],
+    },
+]
+
 PROMPT_INJECTION_RULES = [
     {"id": "ignore_instructions", "score": 30, "reason": "Attempts to override previous instructions", "regex": re.compile(r"\b(ignore|disregard|forget|bypass|override)\b.{0,40}\b(previous|above|system|developer|prior)\b", re.IGNORECASE)},
     {"id": "reveal_system_prompt", "score": 35, "reason": "Attempts to reveal hidden system instructions", "regex": re.compile(r"\b(show|reveal|print|dump|display|leak)\b.{0,40}\b(system prompt|developer prompt|hidden instructions?|chain of thought)\b", re.IGNORECASE)},
@@ -84,6 +160,16 @@ POLICY_PACKS = {
     "education": {"blocked_tools": ["exam_answer_generator", "student_record_export"], "output_risk_threshold": "medium", "prompt_injection_threshold": "high", "blocked_topics": ["graded_homework_answers", "exam_cheating"]},
     "creative_writing": {"blocked_tools": ["full_book_export"], "output_risk_threshold": "high", "prompt_injection_threshold": "high", "blocked_topics": ["copyrighted_style_replication", "verbatim_lyrics"]},
 }
+
+
+def _load_packaged_json(name: str) -> Dict[str, Any]:
+    try:
+        return json.loads(resources.files(__package__).joinpath(name).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+DEFAULT_ENTERPRISE_POLICY = _load_packaged_json("enterprise_policy.json")
 
 SHIELD_PRESETS = {
     "balanced": {
@@ -610,6 +696,168 @@ def sanitize_audit_event(event: Optional[Dict[str, Any]] = None, keep_evidence: 
     if not keep_evidence and ((clone.get("report") or {}).get("sensitive_data")):
         clone["report"]["sensitive_data"]["findings"] = [{"type": item.get("type")} for item in ((clone["report"]["sensitive_data"].get("findings")) or [])]
     return clone
+
+
+def load_enterprise_policy(policy: Optional[Dict[str, Any]] = None, policy_path: Optional[str] = None) -> Dict[str, Any]:
+    if isinstance(policy, dict) and policy:
+        return json.loads(json.dumps(policy))
+    if policy_path:
+        try:
+            return json.loads(Path(policy_path).read_text(encoding="utf-8"))
+        except Exception:
+            return json.loads(json.dumps(DEFAULT_ENTERPRISE_POLICY))
+    return json.loads(json.dumps(DEFAULT_ENTERPRISE_POLICY))
+
+
+def _normalize_enterprise_metadata(metadata: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    payload = metadata or {}
+    return {
+        "role": str(payload.get("role") or payload.get("user_role") or payload.get("userRole") or "").strip().lower(),
+        "business_unit": str(payload.get("business_unit") or payload.get("businessUnit") or "").strip().lower(),
+        "use_case": str(payload.get("use_case") or payload.get("useCase") or payload.get("feature") or "").strip().lower(),
+        "environment": str(payload.get("environment") or payload.get("env") or "").strip().lower(),
+        "gateway_source": str(payload.get("gateway_source") or payload.get("gatewaySource") or "").strip().lower(),
+    }
+
+
+def _replace_enterprise_matches(text: str, findings: List[Dict[str, Any]]) -> Dict[str, Any]:
+    masked = text
+    vault: Dict[str, str] = {}
+    counters: Dict[str, int] = {}
+    applied: List[Dict[str, Any]] = []
+    for finding in findings:
+        match = str(finding.get("match") or "")
+        if not match or match not in masked:
+            continue
+        category = str(finding.get("type") or "enterprise")
+        counters[category] = counters.get(category, 0) + 1
+        token = f"[{str(finding.get('placeholder') or category).upper()}_{counters[category]}]"
+        masked = masked.replace(match, token, 1)
+        vault[token] = match
+        applied.append({
+            **finding,
+            "masked": token,
+        })
+    return {"masked": masked, "findings": applied, "vault": vault}
+
+
+def detect_enterprise_findings(text: Any, metadata: Optional[Dict[str, Any]] = None, direction: str = "input", allowlist: Optional[List[str]] = None) -> Dict[str, Any]:
+    raw = sanitize_text(text)
+    normalized = raw.lower()
+    findings: List[Dict[str, Any]] = []
+    seen = set()
+    allow_terms = {item.lower() for item in (allowlist or []) if item}
+    enterprise_metadata = _normalize_enterprise_metadata(metadata)
+    for rule in ENTERPRISE_DETECTOR_RULES:
+        for regex in rule["regexes"]:
+            for match in regex.finditer(raw):
+                matched = sanitize_text(match.group(0))
+                if not matched or matched.lower() in allow_terms:
+                    continue
+                key = (rule["type"], matched.lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                findings.append({
+                    "type": rule["type"],
+                    "match": matched,
+                    "placeholder": rule["placeholder"],
+                    "direction": direction,
+                    "metadata_scope": enterprise_metadata,
+                })
+    categories = sorted({item["type"] for item in findings})
+    return {
+        "text": raw,
+        "normalized": normalized,
+        "findings": findings,
+        "categories": categories,
+        "has_sensitive_data": bool(findings),
+    }
+
+
+def _metadata_matches_scope(rule: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> bool:
+    scope = dict(rule.get("metadata") or {})
+    if not scope:
+        return True
+    normalized = _normalize_enterprise_metadata(metadata)
+    for key, expected in scope.items():
+        actual = normalized.get(str(key), "")
+        expected_values = expected if isinstance(expected, list) else [expected]
+        if not actual or actual not in {str(item).strip().lower() for item in expected_values if item is not None}:
+            return False
+    return True
+
+
+def evaluate_enterprise_policy(findings: Optional[List[Dict[str, Any]]] = None, metadata: Optional[Dict[str, Any]] = None, direction: str = "input", policy: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    resolved = load_enterprise_policy(policy=policy)
+    items = [item for item in (findings or []) if item]
+    categories = sorted({str(item.get("type")) for item in items if item.get("type")})
+    matched_rules: List[Dict[str, Any]] = []
+    selected_rule: Optional[Dict[str, Any]] = None
+    for rule in resolved.get("rules") or []:
+        directions = [str(item) for item in (rule.get("directions") or ["input", "output"])]
+        if direction not in directions:
+            continue
+        if not _metadata_matches_scope(rule, metadata):
+            continue
+        rule_categories = {str(item) for item in (rule.get("categories") or [])}
+        if not rule_categories.intersection(categories):
+            continue
+        matched_rules.append(rule)
+        if selected_rule is None:
+            selected_rule = rule
+            continue
+        current_priority = int(rule.get("priority", 0))
+        selected_priority = int(selected_rule.get("priority", 0))
+        current_action = str(rule.get("action") or "allow")
+        selected_action = str(selected_rule.get("action") or "allow")
+        if current_priority > selected_priority or (current_priority == selected_priority and ENTERPRISE_ACTION_ORDER.get(current_action, 0) > ENTERPRISE_ACTION_ORDER.get(selected_action, 0)):
+            selected_rule = rule
+    action = str((selected_rule or {}).get("action") or ("mask" if items else "allow"))
+    acknowledged = bool((metadata or {}).get("confirmed_sensitive_operation") or (metadata or {}).get("sensitive_acknowledged") or (metadata or {}).get("policy_confirmation"))
+    review_approved = bool((metadata or {}).get("review_approved") or (metadata or {}).get("policy_review_approved"))
+    requires_confirmation = action == "warn_and_confirm" and not acknowledged
+    requires_review = action == "route_for_review" and not review_approved
+    blocked = action == "block" or requires_confirmation or requires_review
+    selected_categories = sorted({str(item) for item in ((selected_rule or {}).get("categories") or []) if item}.intersection(categories))
+    return {
+        "action": action,
+        "blocked": blocked,
+        "requires_confirmation": requires_confirmation,
+        "requires_review": requires_review,
+        "matched_rules": matched_rules,
+        "selected_rule": selected_rule,
+        "selected_categories": selected_categories,
+        "categories": categories,
+        "user_message": (selected_rule or {}).get("message") or ("Sensitive content was detected and masked." if items else None),
+    }
+
+
+def inspect_provider_gateway(metadata: Optional[Dict[str, Any]] = None, policy: Optional[Dict[str, Any]] = None, provider: Optional[str] = None) -> Dict[str, Any]:
+    resolved = load_enterprise_policy(policy=policy)
+    gateway = resolved.get("provider_gateway") or {}
+    provider_name = str(provider or (metadata or {}).get("requested_provider") or (metadata or {}).get("requestedProvider") or (metadata or {}).get("provider") or "").strip().lower()
+    if not provider_name:
+        return {"allowed": True, "provider": None, "reason": None}
+    metadata_key = str(gateway.get("metadata_key") or "gateway_source")
+    approved_sources = gateway.get("approved_sources") or {}
+    allowed = approved_sources.get(provider_name)
+    gateway_source = _normalize_enterprise_metadata(metadata).get(metadata_key, "")
+    if allowed and gateway_source not in {str(item).strip().lower() for item in allowed}:
+        return {
+            "allowed": False,
+            "provider": provider_name,
+            "reason": gateway.get("blocked_message") or f"Direct access to {provider_name} is not allowed",
+            "gateway_source": gateway_source or None,
+            "approved_sources": allowed,
+        }
+    return {
+        "allowed": True,
+        "provider": provider_name,
+        "reason": None,
+        "gateway_source": gateway_source or None,
+        "approved_sources": allowed,
+    }
 
 
 class RetrievalTrustScorer:
@@ -2204,6 +2452,8 @@ class BlackwallShield:
     audit_trail: Optional[Any] = None
     identity_resolver: Optional[Any] = None
     webhook_url: Optional[str] = None
+    enterprise_policy: Optional[Dict[str, Any]] = None
+    enterprise_policy_path: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.audit_trail is None:
@@ -2217,11 +2467,18 @@ class BlackwallShield:
 
     def inspect_text(self, text: Any) -> Dict[str, Any]:
         effective_options = _resolve_effective_shield_options(self.__dict__)
+        enterprise_policy = load_enterprise_policy(policy=effective_options.get("enterprise_policy"), policy_path=effective_options.get("enterprise_policy_path"))
         pii = mask_value(text, include_originals=effective_options["include_originals"], max_length=effective_options["max_length"], synthetic_replacement=effective_options["synthetic_replacement"], entity_detectors=effective_options["entity_detectors"], detect_named_entities=effective_options["detect_named_entities"])
         injection = detect_prompt_injection(text, max_length=effective_options["max_length"], semantic_scorer=effective_options["semantic_scorer"])
         injection = _apply_custom_prompt_detectors(injection, str(text or ""), effective_options)
         injection = _apply_plugin_detectors(injection, str(text or ""), effective_options)
         injection = _apply_prompt_rule_suppressions(injection, effective_options.get("suppress_prompt_rules"))
+        enterprise = detect_enterprise_findings(
+            pii.get("masked", sanitize_text(text, max_length=effective_options["max_length"])),
+            metadata=None,
+            direction="input",
+            allowlist=((enterprise_policy.get("allowlists") or {}).get("terms")),
+        )
         return {
             "sanitized": pii.get("original", sanitize_text(text, max_length=effective_options["max_length"])),
             "prompt_injection": injection,
@@ -2229,6 +2486,13 @@ class BlackwallShield:
                 "findings": pii["findings"],
                 "has_sensitive_data": pii["has_sensitive_data"],
             },
+            "enterprise_findings": enterprise["findings"],
+            "enterprise_policy": evaluate_enterprise_policy(
+                findings=pii["findings"] + enterprise["findings"],
+                metadata=None,
+                direction="input",
+                policy=enterprise_policy,
+            ),
         }
 
     def _notify(self, alert: Dict[str, Any]) -> None:
@@ -2254,6 +2518,7 @@ class BlackwallShield:
 
     def guard_model_request(self, messages: Any, metadata: Optional[Dict[str, Any]] = None, allow_system_messages: Optional[bool] = None, compare_policy_packs: Optional[List[str]] = None) -> Dict[str, Any]:
         effective_options = _resolve_effective_shield_options(self.__dict__, metadata)
+        enterprise_policy = load_enterprise_policy(policy=effective_options.get("enterprise_policy"), policy_path=effective_options.get("enterprise_policy_path"))
         effective_allow_system = effective_options["allow_system_messages"] if allow_system_messages is None else allow_system_messages
         normalized = normalize_messages(messages, allow_system_messages=effective_allow_system)
         masked = mask_messages(
@@ -2265,6 +2530,24 @@ class BlackwallShield:
             entity_detectors=effective_options["entity_detectors"],
             detect_named_entities=effective_options["detect_named_entities"],
         )
+        enterprise_findings: List[Dict[str, Any]] = []
+        enterprise_vault: Dict[str, str] = {}
+        enterprise_masked_messages: List[Dict[str, Any]] = []
+        allow_terms = ((enterprise_policy.get("allowlists") or {}).get("terms"))
+        for message in masked["masked"]:
+            if message["role"] == "system":
+                enterprise_masked_messages.append(message)
+                continue
+            enterprise_scan = detect_enterprise_findings(message.get("content", ""), metadata=metadata, direction="input", allowlist=allow_terms)
+            replaced = _replace_enterprise_matches(message.get("content", ""), enterprise_scan["findings"])
+            enterprise_findings.extend(replaced["findings"])
+            enterprise_vault.update(replaced["vault"])
+            enterprise_masked_messages.append({**message, "content": replaced["masked"]})
+        if enterprise_findings:
+            masked["masked"] = enterprise_masked_messages
+            masked["findings"].extend(enterprise_findings)
+            masked["vault"].update(enterprise_vault)
+            masked["has_sensitive_data"] = True
         prompt_candidate = [m for m in normalized if m["role"] != "assistant"]
         if effective_options["session_buffer"] and callable(getattr(effective_options["session_buffer"], "record", None)):
             for message in prompt_candidate:
@@ -2296,6 +2579,15 @@ class BlackwallShield:
             tenant_id=str((metadata or {}).get("tenantId") or (metadata or {}).get("tenant_id") or "default"),
             messages=normalized,
         ) if effective_options["token_budget_firewall"] else {"allowed": True, "estimated_tokens": _estimate_token_count(normalized)}
+        enterprise_decision = evaluate_enterprise_policy(
+            findings=masked["findings"],
+            metadata=metadata,
+            direction="input",
+            policy=enterprise_policy,
+        )
+        provider_gate = inspect_provider_gateway(metadata=metadata, policy=enterprise_policy)
+        enterprise_would_block = enterprise_decision["blocked"] or not provider_gate["allowed"]
+        enterprise_reason = provider_gate["reason"] if not provider_gate["allowed"] else enterprise_decision["user_message"]
 
         report = {
             "package": "blackwall-llm-shield-python",
@@ -2309,15 +2601,20 @@ class BlackwallShield:
             },
             "enforcement": {
                 "shadow_mode": effective_options["shadow_mode"],
-                "would_block": would_block or not budget_result["allowed"],
-                "blocked": should_block or not budget_result["allowed"],
+                "would_block": would_block or not budget_result["allowed"] or enterprise_would_block,
+                "blocked": should_block or not budget_result["allowed"] or (enterprise_would_block and not effective_options["shadow_mode"]),
                 "threshold": threshold,
+                "enterprise_action": enterprise_decision["action"],
             },
             "trajectory": threat_trajectory,
             "provenance": provenance,
             "policy_pack": primary_policy["name"] if primary_policy else None,
             "policy_comparisons": policy_comparisons,
             "token_budget": budget_result,
+            "enterprise_policy": {
+                **enterprise_decision,
+                "provider_gateway": provider_gate,
+            },
             "core_interfaces": CORE_INTERFACES,
             "route_policy": {
                 "route": (metadata or {}).get("route") or (metadata or {}).get("path"),
@@ -2341,24 +2638,24 @@ class BlackwallShield:
 
         self._emit_telemetry(_create_telemetry_event("llm_request_reviewed", {
             "metadata": metadata or {},
-            "blocked": should_block or not budget_result["allowed"],
+            "blocked": should_block or not budget_result["allowed"] or (enterprise_would_block and not effective_options["shadow_mode"]),
             "shadow_mode": effective_options["shadow_mode"],
             "report": report,
         }))
 
-        if should_notify or would_block:
+        if should_notify or would_block or enterprise_would_block:
             self._notify({
-                "type": "llm_request_blocked" if should_block else ("llm_request_shadow_blocked" if would_block else "llm_request_risky"),
-                "severity": injection["level"] if (would_block or trajectory_blocked) else "warning",
-                "reason": "Conversation threat trajectory exceeded policy threshold" if trajectory_blocked else ("Prompt injection threshold exceeded" if would_block else "Prompt injection risk detected"),
+                "type": "llm_request_blocked" if (should_block or (enterprise_would_block and not effective_options["shadow_mode"])) else ("llm_request_shadow_blocked" if (would_block or enterprise_would_block) else "llm_request_risky"),
+                "severity": injection["level"] if (would_block or trajectory_blocked) else ("high" if enterprise_would_block else "warning"),
+                "reason": enterprise_reason if enterprise_would_block else ("Conversation threat trajectory exceeded policy threshold" if trajectory_blocked else ("Prompt injection threshold exceeded" if would_block else "Prompt injection risk detected")),
                 "report": report,
             })
 
-        final_blocked = should_block or not budget_result["allowed"]
+        final_blocked = should_block or not budget_result["allowed"] or (enterprise_would_block and not effective_options["shadow_mode"])
         return {
             "allowed": not final_blocked,
             "blocked": final_blocked,
-            "reason": budget_result.get("reason") if not budget_result["allowed"] else ("Prompt injection risk exceeded policy threshold" if should_block else None),
+            "reason": budget_result.get("reason") if not budget_result["allowed"] else (enterprise_reason if (enterprise_would_block and not effective_options["shadow_mode"]) else ("Prompt injection risk exceeded policy threshold" if should_block else None)),
             "messages": masked["masked"],
             "report": report,
             "vault": masked["vault"],
@@ -2370,6 +2667,7 @@ class BlackwallShield:
 
     def review_model_response(self, output: Any, metadata: Optional[Dict[str, Any]] = None, output_firewall: Optional["OutputFirewall"] = None, firewall_options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         effective_options = _resolve_effective_shield_options(self.__dict__, metadata)
+        enterprise_policy = load_enterprise_policy(policy=effective_options.get("enterprise_policy"), policy_path=effective_options.get("enterprise_policy_path"))
         primary_policy = _resolve_policy_pack(effective_options["policy_pack"])
         options = {**effective_options.get("output_firewall_defaults", {}), **(firewall_options or {})}
         firewall = output_firewall or OutputFirewall(
@@ -2380,6 +2678,21 @@ class BlackwallShield:
         )
         review = firewall.inspect(output, system_prompt=effective_options["system_prompt"], scan_chain_of_thought=options.get("scan_chain_of_thought", True), **options)
         review = _apply_plugin_output_scans(review, output, effective_options, metadata)
+        enterprise_scan = detect_enterprise_findings(review.get("masked_output") if isinstance(review.get("masked_output"), str) else output, metadata=metadata, direction="output", allowlist=((enterprise_policy.get("allowlists") or {}).get("terms")))
+        enterprise_replaced = _replace_enterprise_matches(review.get("masked_output") if isinstance(review.get("masked_output"), str) else str(output or ""), enterprise_scan["findings"])
+        enterprise_decision = evaluate_enterprise_policy(
+            findings=(review.get("pii_findings") or []) + enterprise_replaced["findings"],
+            metadata=metadata,
+            direction="output",
+            policy=enterprise_policy,
+        )
+        if enterprise_replaced["findings"] and isinstance(review.get("masked_output"), str):
+            review["masked_output"] = enterprise_replaced["masked"]
+            review["pii_findings"] = (review.get("pii_findings") or []) + enterprise_replaced["findings"]
+        if enterprise_decision["blocked"]:
+            review["allowed"] = False
+            if _severity_weight("high") > _severity_weight(review.get("severity", "low")):
+                review["severity"] = "high"
         provenance = effective_options.get("provenance_graph").append({
             "agent_id": (metadata or {}).get("agent_id") or (metadata or {}).get("agentId") or (metadata or {}).get("model") or "model",
             "input": (metadata or {}).get("prompt_hash", ""),
@@ -2400,6 +2713,7 @@ class BlackwallShield:
                     "compliance_map": _map_compliance([item["id"] for item in review["findings"]]),
                 },
                 "provenance": provenance,
+                "enterprise_policy": enterprise_decision,
             },
         }
         self._emit_telemetry(_create_telemetry_event("llm_output_reviewed", {
@@ -2411,7 +2725,7 @@ class BlackwallShield:
             self._notify({
                 "type": "llm_output_blocked" if not review["allowed"] else "llm_output_risky",
                 "severity": review["severity"],
-                "reason": "Model output failed Blackwall review" if not review["allowed"] else "Model output triggered Blackwall findings",
+                "reason": enterprise_decision["user_message"] if enterprise_decision["blocked"] else ("Model output failed Blackwall review" if not review["allowed"] else "Model output triggered Blackwall findings"),
                 "report": report,
             })
         return {
@@ -2465,6 +2779,10 @@ class BlackwallShield:
     def protect_with_adapter(self, adapter: Any, messages: Any, metadata: Optional[Dict[str, Any]] = None, allow_system_messages: Optional[bool] = None, compare_policy_packs: Optional[List[str]] = None, output_firewall: Optional["OutputFirewall"] = None, firewall_options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not adapter or not callable(getattr(adapter, "invoke", None)):
             raise TypeError("adapter.invoke must be callable")
+        request_metadata = {
+            **(metadata or {}),
+            "requested_provider": (metadata or {}).get("requested_provider") or (metadata or {}).get("requestedProvider") or getattr(adapter, "provider", None),
+        }
 
         def _call_model(payload: Dict[str, Any]) -> Any:
             result = adapter.invoke(payload)
@@ -2482,7 +2800,7 @@ class BlackwallShield:
         return self.protect_model_call(
             messages=messages,
             call_model=_call_model,
-            metadata=metadata,
+            metadata=request_metadata,
             allow_system_messages=allow_system_messages,
             compare_policy_packs=compare_policy_packs,
             map_output=_map_output,

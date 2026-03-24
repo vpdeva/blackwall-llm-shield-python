@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vpdeva-blackwall-llm-shield-python"
-version = "0.6.0"
+version = "0.6.3"
 description = "Open-source Python enterprise LLM protection toolkit for Python services"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -12,8 +12,21 @@ license = "Apache-2.0"
 authors = [
   { name = "Vish", email = "hello@vish.au" }
 ]
-keywords = ["llm", "security", "prompt-injection", "pii", "enterprise"]
+keywords = [
+  "llm", "llm-security", "llm-guardrails", "prompt-injection",
+  "jailbreak-detection", "ai-security", "pii-masking", "rag-security",
+  "owasp-llm", "langchain", "llamaindex", "fastapi", "flask",
+  "enterprise", "ai-safety", "ai-audit", "agentic-ai",
+  "output-firewall", "retrieval-sanitizer", "streaming-firewall"
+]
 classifiers = [
+  "Topic :: Security",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Information Technology",
+  "Development Status :: 4 - Beta",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Operating System :: OS Independent"

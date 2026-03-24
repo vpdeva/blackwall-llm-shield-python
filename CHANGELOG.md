@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.3
+
+- Replaced the README coverage badge with a checked-in badge generated from the OWASP coverage report output and linked it to the implementation.
+- Added a social preview SVG, a contributor-friendly good-first-issues section, and a comparison page covering Blackwall versus OpenAI moderation.
+
+## 0.6.2
+
+- Restructured the README hero section with badges, install commands, and a fast copy-paste guard example.
+
+## 0.6.1
+
+- Expanded PyPI keywords and classifiers to improve discovery across AI security, middleware, HTTP server, and enterprise library categories
+
 ## 0.6.0
 
 - Added threat-intel sync hooks, anomaly detection, telemetry replay, signed inspection attestation, and a streaming output firewall

@@ -928,6 +928,49 @@ class ShieldTests(unittest.TestCase):
       self.assertIn("ceo@example.com", result["rehydrated_output"])
       self.assertTrue(result["zero_trust"]["vault_used"])
 
+    def test_enterprise_policy_blocks_financial_forecasts_and_board_material(self):
+      shield = BlackwallShield()
+      result = shield.guard_model_request(
+          [{"role": "user", "content": "Board deck includes revised revenue forecast and EBITDA guidance of $4.2m"}],
+          metadata={"environment": "executive_briefing"},
+      )
+
+      self.assertTrue(result["blocked"])
+      self.assertEqual(result["report"]["enterprise_policy"]["action"], "block")
+      self.assertIn("financial_forecast", result["report"]["enterprise_policy"]["categories"])
+
+    def test_enterprise_policy_requires_confirmation_for_financial_values(self):
+      shield = BlackwallShield()
+      blocked = shield.guard_model_request(
+          [{"role": "user", "content": "Please summarize $4.2m EBITDA for this quarter"}],
+      )
+      allowed = shield.guard_model_request(
+          [{"role": "user", "content": "Please summarize $4.2m EBITDA for this quarter"}],
+          metadata={"confirmed_sensitive_operation": True},
+      )
+
+      self.assertTrue(blocked["blocked"])
+      self.assertEqual(blocked["report"]["enterprise_policy"]["action"], "warn_and_confirm")
+      self.assertTrue(allowed["allowed"])
+
+    def test_enterprise_policy_blocks_direct_gemini_access_without_gateway(self):
+      shield = BlackwallShield()
+      result = shield.protect_with_adapter(
+          adapter=create_gemini_adapter(
+              client=type("GeminiClient", (), {
+                  "models": type("Models", (), {
+                      "generate_content": staticmethod(lambda **_: {"text": "safe"})
+                  })()
+              })(),
+              model="gemini-2.5-pro",
+          ),
+          messages=[{"role": "user", "content": "Hello"}],
+          metadata={"gateway_source": "direct"},
+      )
+
+      self.assertTrue(result["blocked"])
+      self.assertIn("Direct model access is not allowed", result["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,7 +23,7 @@ jobs:
         uses: googleapis/release-please-action@v4
         with:
           release-type: python
-          package-name: vpdeva-blackwall-llm-shield-python
+          package-name: blackwall-llm-shield-python
 
   publish:
     needs: release
@@ -42,13 +42,16 @@ jobs:
           python-version: '3.11'
 
       - name: Install build tooling
-        run: python -m pip install --upgrade pip build
+        run: python -m pip install --upgrade pip build twine
 
       - name: Run tests
         run: python -m unittest discover -s tests
 
       - name: Build package
         run: python -m build
+
+      - name: Validate package metadata
+        run: python -m twine check dist/*
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

@@ -2,12 +2,12 @@
 
 Security middleware for Python LLM apps and services. Blocks prompt injection, masks PII, inspects outputs, and gates agent tools in Python runtimes.
 
-[![PyPI version](https://img.shields.io/pypi/v/vpdeva-blackwall-llm-shield-python)](https://pypi.org/project/vpdeva-blackwall-llm-shield-python/)
+[![PyPI version](https://img.shields.io/pypi/v/blackwall-llm-shield-python)](https://pypi.org/project/blackwall-llm-shield-python/)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![OWASP LLM coverage](./assets/owasp-coverage.svg)](./src/blackwall_llm_shield/core.py)
 
 ```bash
-pip install vpdeva-blackwall-llm-shield-python
+pip install blackwall-llm-shield-python
 ```
 
 ```python
@@ -42,8 +42,8 @@ Links: [Comparison guide](./wiki/Blackwall-vs-OpenAI-Moderation.md) | [Contribut
 ## Install
 
 ```bash
-pip install vpdeva-blackwall-llm-shield-python
-pip install "vpdeva-blackwall-llm-shield-python[integrations,semantic]"
+pip install blackwall-llm-shield-python
+pip install "blackwall-llm-shield-python[integrations,semantic]"
 ```
 
 The core package is intended to be standalone. Add extras only when you want framework adapters or heavier local semantic tooling.

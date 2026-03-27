@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vpdeva-blackwall-llm-shield-python"
-version = "0.6.5"
+name = "blackwall-llm-shield-python"
+version = "0.6.6"
 description = "Security middleware for Python LLM apps and services. Blocks prompt injection, masks PII, inspects outputs, and gates agent tools."
 readme = "README.md"
 requires-python = ">=3.9"

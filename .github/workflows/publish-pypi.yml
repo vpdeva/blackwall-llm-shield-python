@@ -13,6 +13,8 @@ permissions:
 jobs:
   publish-pypi:
     runs-on: ubuntu-latest
+    environment:
+      name: pypi
 
     steps:
       - name: Check out repository
@@ -47,5 +49,4 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          password: ${{ secrets.PYPI_TOKEN }}
           packages-dir: dist/

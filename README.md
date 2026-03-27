@@ -38,6 +38,14 @@ Links: [Comparison guide](./wiki/Blackwall-vs-OpenAI-Moderation.md) | [Contribut
 - Sanitizes retrieval documents for RAG pipelines
 - Records signed audit events and dashboard models
 - Supports canary tokens, synthetic PII replacement, optional spaCy/Presidio detectors, built-in red-team playbooks, and framework helpers
+- Enforces intent sovereignty with cognitive locks when reasoning or tool plans drift from user intent
+- Redacts untrusted image metadata and OCR text with cross-modal environment-injection defense
+- Issues task-scoped agent passports and verifies MCP/tool actions against zero-trust identity boundaries
+- Supports agentic JWT-style identity exchange and capability-manifest enforcement at the tool boundary
+- Blocks business-logic abuse with workflow-state validation before high-impact actions execute
+- Shares decaying signatory antigens through an adaptive threat mesh instead of relying only on static rule updates
+- Ships an `agent_governance` preset and `AutonomousAdversarialAuditor` for control-plane style agent security
+- Adds swarm-grade governance primitives like Byzantine consensus, alignment credit ledgers, worldview routing, and truth reflection
 
 ## Install
 
@@ -102,6 +110,14 @@ Enterprise deployments can also enrich emitted events with SSO/user context and 
 
 `OutputFirewall` can compare a response to retrieval documents and flag unsupported claims or unprofessional tone before the answer leaves your service.
 
+### Autonomous governance and agent security
+
+Use `IntentSovereigntyEngine` to detect reasoning drift and trigger a cognitive lock before a tool call happens. Pair `CrossModalConsistencyGuard` with `ImageMetadataScanner` and `VisualInstructionDetector` when your app ingests screenshots, OCR, alt text, or other perceptual inputs that may carry indirect instructions.
+
+For autonomous agents, combine `AgentIdentityRegistry`, `MCPSecurityProxy`, and task-scoped passports so tools verify what the agent is allowed to do instead of trusting the model's final text alone. Use `AdaptiveThreatMesh` to export and import decaying signatory antigens across deployments, and run `BehavioralChaosEngineer` to continuously red-team your current shield configuration under controlled failure scenarios.
+
+For stateful business workflows, add `WorkflowStateGuard` to `ToolPermissionFirewall` so high-impact actions like transfers, sends, or deletes require prior approvals, recorded sequence steps, and evidence keys before execution is even considered.
+
 ### Lightweight integrations
 
 Use `BlackwallFastAPIMiddleware`, `create_flask_middleware()`, `create_langchain_callbacks()`, or `create_llamaindex_callback()` to wire Blackwall into framework or orchestration entry points with less glue code.
@@ -157,6 +173,7 @@ Recommended presets:
 - `document_intake` for upload-heavy intake and review flows
 - `citizen_services` for identity-aware service delivery workflows
 - `internal_ops_agent` for internal operational assistants with shadow-first defaults
+- `agent_governance` for zero-trust agent identity, business-logic validation, and high-sensitivity tool workflows
 
 ### Global Governance Pack
 
@@ -170,6 +187,16 @@ The 0.5.0 line also adds globally applicable enterprise controls that are useful
 - `detect_operational_drift()` for release-over-release noise monitoring
 - `ConversationThreatTracker`, `shield.use(plugin)`, `generate_coverage_report()`, and `unvault()` for multi-turn defense, ecosystem extensions, OWASP reporting, and reversible PII workflows
 - `AdversarialMutationEngine`, `PromptProvenanceGraph`, and `LiteBlackwallShield` for corpus hardening, cross-hop tracing, and lightweight deployments
+- `IntentSovereigntyEngine` for cognitive locks when reasoning or planned tools drift from the original task
+- `CrossModalConsistencyGuard` for indirect prompt-injection defense across OCR, captions, and image metadata
+- `BehavioralChaosEngineer` for built-in continuous chaos-style red-teaming
+- `AutonomousAdversarialAuditor` for packaged ghost-agent scenarios that probe passports, workflow skips, and retrieval abuse
+- `ByzantineSwarmConsensus` for BFT-style approval over agent swarms with malicious-node isolation
+- `AlignmentCreditLedger` for incentive-style scoring of transparent reasoning vs. capability hiding
+- `WorldviewPolicyRouter` for locale/domain-specific moral anchors and institutional norms
+- `TruthSovereignReflector` for hidden adversarial self-critique before trusting a final answer
+- `AgentIdentityRegistry.issue_signed_passport()`, `verify_task_scope()`, and `issue_passport_token()` for task-scoped zero-trust agent identity
+- `AdaptiveThreatMesh.export_signatory_antigens()` and `import_signatory_antigens()` for distributed threat learning across fleets
 
 ## Example Workflow
 

@@ -18,11 +18,14 @@ from urllib import request
 
 
 SENSITIVE_PATTERNS = {
+    # Checksum-bearing national identifiers run first, before the broad phone pattern can claim their digits.
+    # Each has a validator in IDENTIFIER_VALIDATORS; a match that fails its checksum is left for later patterns.
+    "nz_ird": re.compile(r"(?<![\d-])(?:\d{2,3}[\s-]?\d{3}[\s-]?\d{3})(?![\d-])"),
+    "tfn": re.compile(r"(?<![\d-])\d{3}[\s-]?\d{3}[\s-]?\d{3}(?![\d-])"),
+    "medicare": re.compile(r"(?<![\d-])[2-6]\d{3}\s?\d{5}\s?\d(?:[\s/-]?[1-9])?(?![\d-])"),
     "email": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
-    "phone": re.compile(r"(\+?61\s?)?(\(0\d\)|0\d)[\s-]?\d{4}[\s-]?\d{4}|\+?\d{1,3}[\s-]?\(?\d{2,4}\)?[\s-]?\d{3,4}[\s-]?\d{3,4}"),
     "credit_card": re.compile(r"\b(?:\d{4}[\s-]?){3}\d{4}\b"),
-    "medicare": re.compile(r"\b\d{4}\s?\d{5}\s?\d\b"),
-    "tfn": re.compile(r"\b\d{3}[\s-]?\d{3}[\s-]?\d{3}\b"),
+    "phone": re.compile(r"(\+?61\s?)?(\(0\d\)|0\d)[\s-]?\d{4}[\s-]?\d{4}|\+?\d{1,3}[\s-]?\(?\d{2,4}\)?[\s-]?\d{3,4}[\s-]?\d{3,4}"),
     "passport": re.compile(r"\b[A-Z]{1,2}\d{6,9}\b"),
     "license": re.compile(r"\b\d{8,10}\b"),
     "address": re.compile(r"\b\d{1,5}\s+[A-Za-z\s]+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Court|Ct|Lane|Ln|Way|Place|Pl)\b", re.IGNORECASE),
@@ -32,6 +35,110 @@ SENSITIVE_PATTERNS = {
     "api_key": re.compile(r"\b(?:sk|rk|pk|api)[-_][A-Za-z0-9_-]{12,}\b"),
     "bearer_token": re.compile(r"\bBearer\s+[A-Za-z0-9\-._~+/]+=*\b", re.IGNORECASE),
 }
+
+
+def _digits(value: str) -> str:
+    return re.sub(r"\D", "", value or "")
+
+
+def is_valid_nz_ird(value: str) -> bool:
+    """NZ IRD number: 8 or 9 digits, range 10,000,000 to 150,000,000, mod-11 check digit with a secondary weighting."""
+    d = _digits(value)
+    if len(d) not in (8, 9):
+        return False
+    d = d.zfill(9)
+    n = int(d)
+    if n < 10_000_000 or n > 150_000_000:
+        return False
+    base, check = [int(c) for c in d[:8]], int(d[8])
+    for weights in ([3, 2, 7, 6, 5, 4, 3, 2], [7, 4, 3, 2, 5, 2, 7, 6]):
+        rem = sum(a * b for a, b in zip(base, weights)) % 11
+        calc = 0 if rem == 0 else 11 - rem
+        if calc != 10:
+            return calc == check
+    return False
+
+
+def is_valid_au_tfn(value: str) -> bool:
+    """Australian Tax File Number: 9 digits whose weighted sum is divisible by 11."""
+    d = _digits(value)
+    return len(d) == 9 and sum(int(a) * b for a, b in zip(d, [1, 4, 3, 7, 5, 8, 6, 9, 10])) % 11 == 0
+
+
+def is_valid_au_medicare(value: str) -> bool:
+    """Australian Medicare card number: 10 digits (plus optional IRN), first digit 2-6, weighted check digit in position 9."""
+    d = _digits(value)
+    if len(d) not in (10, 11) or d[0] not in "23456":
+        return False
+    return sum(int(a) * b for a, b in zip(d[:8], [1, 3, 7, 9, 1, 3, 7, 9])) % 10 == int(d[8])
+
+
+def is_valid_au_abn(value: str) -> bool:
+    """Australian Business Number: 11 digits, first digit minus one, weighted sum divisible by 89."""
+    d = _digits(value)
+    # ABN check digits are always 11-99 (89 - (sum mod 89) + 10), so a leading "10" can never be issued.
+    if len(d) != 11 or d[0] == "0" or d.startswith("10"):
+        return False
+    nums = [int(c) for c in d]
+    nums[0] -= 1
+    return sum(a * b for a, b in zip(nums, [10, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19])) % 89 == 0
+
+
+def is_valid_nzbn(value: str) -> bool:
+    """New Zealand Business Number: 13-digit GS1 GLN starting 94, GS1 mod-10 check digit."""
+    d = _digits(value)
+    if len(d) != 13 or not d.startswith("94"):
+        return False
+    total = sum(int(c) * (3 if i % 2 else 1) for i, c in enumerate(d[:12]))
+    return (10 - total % 10) % 10 == int(d[12])
+
+
+IDENTIFIER_VALIDATORS = {
+    "nz_ird": is_valid_nz_ird,
+    "tfn": is_valid_au_tfn,
+    "medicare": is_valid_au_medicare,
+}
+
+# Business identifiers are public registry data, often required as evidence (for example "provide your NZBN").
+# They are reported by classify_identifiers() but never masked by default.
+BUSINESS_IDENTIFIER_PATTERNS = {
+    "au_abn": (re.compile(r"(?<!\d)\d{2}\s?\d{3}\s?\d{3}\s?\d{3}(?!\d)"), is_valid_au_abn),
+    "nzbn": (re.compile(r"(?<!\d)94\d{11}(?!\d)"), is_valid_nzbn),
+}
+
+
+def classify_identifiers(text: str) -> List[Dict[str, Any]]:
+    """Report checksum-valid national identifiers in text without changing it."""
+    found: List[Dict[str, Any]] = []
+    for name, pattern in SENSITIVE_PATTERNS.items():
+        validator = IDENTIFIER_VALIDATORS.get(name)
+        if validator:
+            found.extend({"type": name, "personal": True, "span": m.span()} for m in pattern.finditer(text or "") if validator(m.group(0)))
+    for name, (pattern, validator) in BUSINESS_IDENTIFIER_PATTERNS.items():
+        found.extend({"type": name, "personal": False, "span": m.span()} for m in pattern.finditer(text or "") if validator(m.group(0)))
+    return found
+
+
+_EPHEMERAL_SECRET_WARNED: Dict[str, bool] = {}
+
+
+def _resolve_secret(provided: Optional[str], env_name: str, label: str) -> str:
+    """Use the caller's secret, then the environment, then a random per-process secret. Never a shared constant."""
+    if provided:
+        return provided
+    env_value = __import__("os").environ.get(env_name)
+    if env_value:
+        return env_value
+    if not _EPHEMERAL_SECRET_WARNED.get(label):
+        __import__("warnings").warn(
+            f"{label}: no secret configured; using a random per-process secret. Signatures will not verify across processes. "
+            f"Set {env_name} or pass secret= for durable signatures.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        _EPHEMERAL_SECRET_WARNED[label] = True
+    return secrets.token_hex(32)
+
 
 FIELD_HINTS = [
     "password",
@@ -53,6 +160,7 @@ FIELD_HINTS = [
     "dob",
     "birth",
     "tfn",
+    "ird",
 ]
 
 ENTERPRISE_ACTION_ORDER = {
@@ -630,7 +738,7 @@ class DataClassificationGate:
         if payload.get("classification"):
             return str(payload["classification"])
         finding_types = [item.get("type") for item in (findings or []) if item.get("type")]
-        if any(item in {"credit_card", "tfn", "passport", "license", "api_key", "jwt", "bearer_token"} for item in finding_types):
+        if any(item in {"credit_card", "tfn", "nz_ird", "medicare", "passport", "license", "api_key", "jwt", "bearer_token"} for item in finding_types):
             return "restricted"
         if finding_types:
             return "confidential"
@@ -1533,8 +1641,19 @@ def mask_text(text: Any, include_originals: bool = False, max_length: int = 5000
     findings: List[Dict[str, Any]] = []
     vault: Dict[str, str] = {}
 
+    # Shield checksum-valid business identifiers (ABN, NZBN) from every pattern, including the broad phone rule.
+    protected: List[str] = []
+    for _name, (bpattern, bvalidator) in BUSINESS_IDENTIFIER_PATTERNS.items():
+        def _protect(m: Any, _v: Any = bvalidator) -> str:
+            if not _v(m.group(0)):
+                return m.group(0)
+            protected.append(m.group(0))
+            return "\ue000" + chr(0xE100 + len(protected) - 1) + "\ue000"
+        masked = bpattern.sub(_protect, masked)
+
     for name, pattern in SENSITIVE_PATTERNS.items():
-        matches = list(pattern.finditer(masked))
+        validator = IDENTIFIER_VALIDATORS.get(name)
+        matches = [m for m in pattern.finditer(masked) if not validator or validator(m.group(0))]
         if not matches:
             continue
         offset = 0
@@ -1561,6 +1680,9 @@ def mask_text(text: Any, include_originals: bool = False, max_length: int = 5000
     masked = contextual["masked"]
     findings.extend(contextual["findings"])
     vault.update(contextual["vault"])
+
+    for i, original in enumerate(protected):
+        masked = masked.replace("\ue000" + chr(0xE100 + i) + "\ue000", original)
 
     return {
         "original": sanitized,
@@ -2025,10 +2147,10 @@ class CoTScanner:
 
 
 class AgentIdentityRegistry:
-    def __init__(self, secret: str = "blackwall-agent-passport-secret"):
+    def __init__(self, secret: Optional[str] = None):
         self.identities: Dict[str, Dict[str, Any]] = {}
         self.ephemeral_tokens: Dict[str, Dict[str, Any]] = {}
-        self.secret = secret
+        self.secret = _resolve_secret(secret, "BLACKWALL_PASSPORT_SECRET", "AgentIdentityRegistry")
 
     def register(self, agent_id: str, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         identity = {
@@ -3756,8 +3878,8 @@ class RetrievalSanitizer:
 
 
 class AuditTrail:
-    def __init__(self, secret: str = "blackwall-default-secret", identity_resolver: Optional[Any] = None):
-        self.secret = secret
+    def __init__(self, secret: Optional[str] = None, identity_resolver: Optional[Any] = None):
+        self.secret = _resolve_secret(secret, "BLACKWALL_AUDIT_SECRET", "AuditTrail")
         self.identity_resolver = identity_resolver
         self.events: List[Dict[str, Any]] = []
 

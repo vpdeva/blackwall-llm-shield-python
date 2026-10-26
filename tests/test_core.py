@@ -634,7 +634,7 @@ class ShieldTests(unittest.TestCase):
       result = shield.guard_model_request(
           [{
               "role": "user",
-              "content": "Customer TFN 123 456 789, Medicare 2423 51673 1, phone 0412 345 678, address 10 Queen Street Melbourne VIC 3000",
+              "content": "Customer TFN 123 456 782, Medicare 2123 45670 1, phone 0412 345 678, address 10 Queen Street Melbourne VIC 3000",
           }],
           metadata={"tenant_id": "shipping-app"},
       )

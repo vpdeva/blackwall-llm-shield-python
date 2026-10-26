@@ -1,8 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
+Security hardening release. Read "Migrating to 0.7.0" in MIGRATING.md before upgrading a sidecar deployment.
+
+### Security
+- Removed the shared default signing secrets (`blackwall-agent-passport-secret`, `blackwall-default-secret`) from `AgentIdentityRegistry` and `AuditTrail`. They now use `secret=`, then `BLACKWALL_PASSPORT_SECRET` / `BLACKWALL_AUDIT_SECRET`, then a random per-process secret with a warning. Anyone who knew the old constant could forge passports and audit signatures for any deployment that didn't set its own.
+- The sidecar now binds to `127.0.0.1` by default (was `0.0.0.0`) and refuses to start without `BLACKWALL_API_KEY` unless `--allow-no-auth` is passed on a loopback interface. Previously a sidecar started without a key accepted unauthenticated requests on every interface.
+- Sidecar API keys must be at least 32 characters and are compared in constant time.
+- The sidecar rejects bodies over `BLACKWALL_MAX_BODY_BYTES` (default 1 MiB), non-JSON content types and non-object JSON, never logs bodies or headers, and serves requests on threads so one slow client cannot stall it.
+
+### Docs
 - Updated the default OWASP LLM coverage report and checked-in badge to reflect full built-in framework coverage across the OWASP LLM Top 10 2025 categories.
+
+### Detection
+- Added checksum-validated detection for NZ IRD numbers (`nz_ird`) and validated the existing AU TFN and Medicare patterns. A number with the right shape but a failing checksum is no longer labelled as a government identifier, which removes a large class of false positives (order numbers, references, phone numbers).
+- IRD and Medicare findings now classify a request as `restricted`, the same as TFN.
+- Added `classify_identifiers()`, which reports ABN and NZBN alongside personal identifiers. Business identifiers are public registry data and are never masked by `mask_text()`, so evidence such as "NZBN 9429051850012" survives intact.
+- Every checksum was cross-checked against python-stdnum on 200,000 random inputs per scheme. This found and fixed an ABN edge case: numbers starting with "10" pass mod-89 but can never be issued.
 
 ## 0.6.3
 
